@@ -1,0 +1,21 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String   @default("Untitled document")
+  // TipTap/ProseMirror JSON, serialized.
+  content   String   @default("{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}")
+  plainText String   @default("")
+  wordCount Int      @default(0)
+  // Writing goals (audience, citation style, etc.), serialized JSON.
+  goals     String   @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

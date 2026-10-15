@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Polaris
 
-## Getting Started
+An open-source writing companion for academic writing. Polaris underlines issues as you write (contractions,
+wordy phrases, passive voice, citation formatting, and more) and explains each one, so
+students learn the conventions instead of just accepting fixes.
 
-First, run the development server:
+![Polaris editor with suggestions](docs/screenshot.png)
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env
+npm run db:push      # create the local SQLite database
+npm run dev          # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Scripts
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Command             | What it does                               |
+| ------------------- | ------------------------------------------ |
+| `npm run dev`       | Dev server                                 |
+| `npm run build`     | Production build                           |
+| `npm test`          | Unit tests (Vitest)                        |
+| `npm run test:e2e`  | End-to-end tests (Playwright, separate DB) |
+| `npm run lint`      | ESLint                                     |
+| `npm run typecheck` | TypeScript, no emit                        |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## How feedback works
 
-## Learn More
+Polaris uses two layers:
 
-To learn more about Next.js, take a look at the following resources:
+1. **Rules (built).** Fast, deterministic checks in `src/lib/rules/` run on each paragraph
+   as you type. Results are cached by paragraph text, so only the paragraph you are editing
+   is rechecked.
+2. **AI (planned, Phase 3).** Per-paragraph suggestions from Claude for issues rules can't
+   catch, such as hedging, argument flow, and unsupported claims.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Suggestions fall into five categories: correctness, clarity, concision, formality and
+citations. Citation rules follow the style chosen under **Goals** (APA by default).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Roadmap
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [x] Phase 1: editor, document CRUD, autosave
+- [x] Phase 2: rule engine, underlines, suggestion cards, writing goals
+- [ ] Phase 3: LLM suggestions (schema-validated, cached, cancellable)
+- [ ] Phase 4: overview panel and scores
+- [ ] Phase 5: whole-document review
+- [ ] Phase 6: accounts, PostgreSQL
+- [ ] Phase 7: import/export (.docx, Markdown), polish
