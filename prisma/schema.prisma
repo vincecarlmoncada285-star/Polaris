@@ -7,8 +7,23 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id           String     @id @default(cuid())
+  // Stored trimmed and lowercased (see src/lib/users/schema.ts).
+  email        String     @unique
+  name         String?
+  passwordHash String
+  // Opt-in: AI suggestions send paragraph text to the Claude API.
+  aiEnabled    Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  documents    Document[]
+}
+
 model Document {
   id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String   @default("Untitled document")
   // TipTap/ProseMirror JSON, serialized.
   content   String   @default("{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}")
@@ -18,4 +33,6 @@ model Document {
   goals     String   @default("{}")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([userId, updatedAt])
 }

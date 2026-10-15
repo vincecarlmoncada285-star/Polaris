@@ -40,10 +40,14 @@ function toDTO(row: Row): DocumentDTO {
   };
 }
 
+// Every method is scoped to one user. Another user's document is indistinguishable from a
+// missing one (null / false), and writes put `userId` in the WHERE clause itself, so there is
+// no window between an ownership check and the write.
 export function createDocumentService(db: PrismaClient) {
   return {
-    async list(): Promise<DocumentSummary[]> {
+    async list(userId: string): Promise<DocumentSummary[]> {
       const rows = await db.document.findMany({
+        where: { userId },
         orderBy: { updatedAt: "desc" },
         select: { id: true, title: true, wordCount: true, updatedAt: true, plainText: true },
       });
@@ -56,19 +60,23 @@ export function createDocumentService(db: PrismaClient) {
       }));
     },
 
-    async get(id: string): Promise<DocumentDTO | null> {
-      const row = await db.document.findUnique({ where: { id } });
+    async get(userId: string, id: string): Promise<DocumentDTO | null> {
+      const row = await db.document.findFirst({ where: { id, userId } });
       return row ? toDTO(row) : null;
     },
 
-    async create(input: { title?: string } = {}): Promise<DocumentDTO> {
+    async create(userId: string, input: { title?: string } = {}): Promise<DocumentDTO> {
       const row = await db.document.create({
-        data: input.title ? { title: input.title } : {},
+        data: input.title ? { userId, title: input.title } : { userId },
       });
       return toDTO(row);
     },
 
-    async update(id: string, input: UpdateDocumentInput): Promise<DocumentDTO | null> {
+    async update(
+      userId: string,
+      id: string,
+      input: UpdateDocumentInput,
+    ): Promise<DocumentDTO | null> {
       const data: Record<string, unknown> = {};
       if (input.title !== undefined) data.title = input.title || "Untitled document";
       if (input.content !== undefined) data.content = JSON.stringify(input.content);
@@ -77,28 +85,17 @@ export function createDocumentService(db: PrismaClient) {
         data.wordCount = countWords(input.plainText);
       }
       if (input.goals !== undefined) data.goals = JSON.stringify(input.goals);
-      try {
-        return toDTO(await db.document.update({ where: { id }, data }));
-      } catch (e) {
-        if (isNotFound(e)) return null;
-        throw e;
-      }
+      const { count } = await db.document.updateMany({ where: { id, userId }, data });
+      if (count === 0) return null;
+      const row = await db.document.findFirst({ where: { id, userId } });
+      return row ? toDTO(row) : null;
     },
 
-    async remove(id: string): Promise<boolean> {
-      try {
-        await db.document.delete({ where: { id } });
-        return true;
-      } catch (e) {
-        if (isNotFound(e)) return false;
-        throw e;
-      }
+    async remove(userId: string, id: string): Promise<boolean> {
+      const { count } = await db.document.deleteMany({ where: { id, userId } });
+      return count > 0;
     },
   };
-}
-
-function isNotFound(e: unknown): boolean {
-  return typeof e === "object" && e !== null && (e as { code?: string }).code === "P2025";
 }
 
 export type DocumentService = ReturnType<typeof createDocumentService>;

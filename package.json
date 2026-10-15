@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "DATABASE_URL=file:./e2e.db prisma db push --skip-generate && DATABASE_URL=file:./e2e.db playwright test",
+    "test:e2e": "node -e \"require('fs').rmSync('prisma/e2e.db',{force:true})\" && DATABASE_URL=file:./e2e.db prisma db push --skip-generate && DATABASE_URL=file:./e2e.db playwright test",
     "db:push": "prisma db push",
     "format": "prettier --write .",
     "prepare": "husky"
@@ -23,7 +23,9 @@
     "@tiptap/pm": "^2.11.5",
     "@tiptap/react": "^2.11.5",
     "@tiptap/starter-kit": "^2.11.5",
+    "bcryptjs": "3.0.3",
     "next": "15.5.4",
+    "next-auth": "5.0.0-beta.32",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "zod": "^3.25.76"

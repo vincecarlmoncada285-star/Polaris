@@ -5,7 +5,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createAutosaver, type SaveStatus } from "@/lib/autosave";
+import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
 import type { DocumentDTO } from "@/lib/documents/service";
 import type { UpdateDocumentInput, WritingGoals } from "@/lib/documents/schema";
 import {
@@ -107,13 +107,16 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     },
   });
 
-  // Save whatever is queued when the tab is hidden or closed.
+  // Save whatever is queued when the tab is hidden or closed, and before signing out (which
+  // ends the session before this component unmounts).
   useEffect(() => {
     const flush = () => void autosaver.flush();
     const onVisibility = () => document.visibilityState === "hidden" && flush();
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", onVisibility);
+    const unregister = registerPendingSave(() => autosaver.flush());
     return () => {
+      unregister();
       window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", onVisibility);
       flush();

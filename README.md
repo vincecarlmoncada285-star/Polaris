@@ -11,20 +11,32 @@ students learn the conventions instead of just accepting fixes.
 ```bash
 npm install
 cp .env.example .env
+# Set AUTH_SECRET in .env: Auth.js signs session cookies with it, and will not start without it.
+openssl rand -base64 32   # paste the output as AUTH_SECRET="…"
+                          # (or run `npx auth secret`, which writes it to .env.local)
 npm run db:push      # create the local SQLite database
-npm run dev          # http://localhost:3000
+npm run dev          # http://localhost:3000, then create an account at /signup
 ```
+
+`.env` is gitignored; `.env.example` lists every variable and is committed.
+
+Upgrading a local database created before accounts existed? `db:push` cannot add the required
+`Document.userId` column to existing rows, so reset it with `npx prisma db push --force-reset`
+(this deletes the local documents), then sign up again.
 
 ## Scripts
 
-| Command             | What it does                               |
-| ------------------- | ------------------------------------------ |
-| `npm run dev`       | Dev server                                 |
-| `npm run build`     | Production build                           |
-| `npm test`          | Unit tests (Vitest)                        |
-| `npm run test:e2e`  | End-to-end tests (Playwright, separate DB) |
-| `npm run lint`      | ESLint                                     |
-| `npm run typecheck` | TypeScript, no emit                        |
+| Command             | What it does                                               |
+| ------------------- | ---------------------------------------------------------- |
+| `npm run dev`       | Dev server                                                 |
+| `npm run build`     | Production build                                           |
+| `npm test`          | Unit tests (Vitest)                                        |
+| `npm run test:e2e`  | End-to-end tests (Playwright, fresh `prisma/e2e.db` a run) |
+| `npm run lint`      | ESLint                                                     |
+| `npm run typecheck` | TypeScript, no emit                                        |
+
+`npm run test:e2e` needs no `.env`: Playwright gives the server a test-only `AUTH_SECRET` and
+`AUTH_TRUST_HOST=true`, so it runs as is in CI.
 
 ## How feedback works
 
@@ -34,17 +46,72 @@ Polaris uses two layers:
    as you type. Results are cached by paragraph text, so only the paragraph you are editing
    is rechecked.
 2. **AI (planned, Phase 3).** Per-paragraph suggestions from Claude for issues rules can't
-   catch, such as hedging, argument flow, and unsupported claims.
+   catch, such as hedging, argument flow, and unsupported claims. Off unless the writer turns
+   on **AI suggestions** in Settings.
 
 Suggestions fall into five categories: correctness, clarity, concision, formality and
 citations. Citation rules follow the style chosen under **Goals** (APA by default).
+
+## Accounts
+
+Each writer has an account, and documents are private to it.
+
+- **Sign-in** is email and password ([Auth.js v5](https://authjs.dev), Credentials provider).
+  Emails are stored trimmed and lowercased; passwords (8–128 characters) are hashed with
+  bcrypt, cost 12. A wrong password and an unknown email get the same message and take the
+  same time, so the form does not reveal who has an account.
+- **Sessions** are signed, encrypted JWT cookies (30 days), so there is no session table.
+  Signing out clears the cookie on that device. Changing the password does not sign out other
+  devices; deleting the account does, as their requests then find no user.
+- **Privacy.** Every API route calls `requireUser()` and every query is scoped by user id. Another
+  writer's document is a 404, exactly like one that does not exist.
+- **Rate limits** (in memory, per server process, sliding windows): 10 sign-in attempts per
+  15 minutes per email and IP, plus at most 50 an hour per email from any number of IPs; 5
+  sign-up attempts per hour per IP (counted once the form is valid, so a whole class signing up
+  behind one school network will hit it); 10 password-change attempts per 15 minutes per
+  account.
+- **Client IPs and proxies.** Polaris can only tell clients apart by IP when a reverse proxy
+  you control reports their address. Without one, `X-Forwarded-For` is whatever the client sent,
+  so it is ignored and **all clients share the per-IP limits** (5 sign-ups an hour for the
+  whole server, 10 sign-in attempts per email). Behind nginx, Caddy or a load balancer that
+  appends the client address to `X-Forwarded-For`, set `TRUSTED_PROXY_HOPS` to the number of
+  such proxies (usually `1`), and make sure clients cannot reach Polaris except through them.
+- **Settings** (`/settings`): display name, the AI suggestions switch (off by default), password
+  change, and account deletion (type your email to confirm; your documents are deleted too).
+
+When self-hosting behind a proxy, keep `AUTH_TRUST_HOST=true` only if the proxy sets the `Host`
+and `X-Forwarded-Host` headers itself; otherwise set `AUTH_URL` to the public URL.
+
+### Adding an OAuth provider
+
+The config is split so this stays small. `src/auth.config.ts` is edge-safe (middleware imports
+it); `src/auth.ts` adds what needs Node (Prisma, bcrypt) and merges in the providers listed in
+`auth.config.ts`. To add GitHub, say:
+
+1. Register an OAuth app with the callback URL `https://<your-host>/api/auth/callback/github`, and
+   set `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` (Auth.js reads `AUTH_<PROVIDER>_ID/SECRET`).
+2. Add the provider to `providers` in `src/auth.config.ts`: `providers: [GitHub]`, imported from
+   `next-auth/providers/github`. OAuth providers need no database, so they are edge-safe.
+3. Map the OAuth identity to a Polaris user. Polaris keeps its own `User` table rather than an
+   Auth.js adapter, so in `src/auth.ts` override the `jwt` callback: when
+   `account?.provider !== "credentials"`, find or create the `User` by the provider's email
+   (only if the provider marks it verified) and set `token.id` to that user's id. Make
+   `passwordHash` optional in `prisma/schema.prisma` for OAuth-only users, and have
+   `verifyCredentials` treat a missing hash as a wrong password. To link accounts by provider
+   id rather than email, add an `Account` model (`provider`, `providerAccountId`, `userId`),
+   or switch to `@auth/prisma-adapter`.
+4. Add a "Continue with GitHub" button to `/signin`: a form whose server action calls
+   `signIn("github", { redirectTo })`, with `redirectTo` passed through `sanitizeCallbackUrl`.
 
 ## Roadmap
 
 - [x] Phase 1: editor, document CRUD, autosave
 - [x] Phase 2: rule engine, underlines, suggestion cards, writing goals
+- [x] Phase 6 (built early, so the AI routes are written auth-aware): accounts, private
+      per-user documents, settings. The database stays SQLite, which suits a single self-hosted
+      server; for serverless hosting, whose filesystem does not persist, change `provider` in
+      `prisma/schema.prisma` to `"postgresql"` and point `DATABASE_URL` at a Postgres server.
 - [ ] Phase 3: LLM suggestions (schema-validated, cached, cancellable)
 - [ ] Phase 4: overview panel and scores
 - [ ] Phase 5: whole-document review
-- [ ] Phase 6: accounts, PostgreSQL
 - [ ] Phase 7: import/export (.docx, Markdown), polish

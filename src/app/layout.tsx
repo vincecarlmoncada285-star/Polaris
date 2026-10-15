@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Navbar } from "@/components/Navbar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,17 +18,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           Skip to content
         </a>
         <header className="border-b border-border bg-surface">
-          <nav className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
-            <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-              <span aria-hidden className="text-accent">
-                ✦
-              </span>{" "}
-              Polaris
-            </Link>
-            <Link href="/" className="text-sm text-muted hover:text-foreground">
-              Documents
-            </Link>
-          </nav>
+          <Navbar />
         </header>
         <main id="main">{children}</main>
       </body>

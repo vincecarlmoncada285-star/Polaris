@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAutosaver } from "@/lib/autosave";
+import { createAutosaver, flushPendingSaves, registerPendingSave } from "@/lib/autosave";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -58,5 +58,57 @@ describe("createAutosaver", () => {
     saver.schedule(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(statuses).toEqual(["pending", "saving", "error"]);
+  });
+});
+
+describe("flushPendingSaves (before sign-out)", () => {
+  it("saves what a registered autosaver has queued, then resolves", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const saver = createAutosaver(save, { delayMs: 800 });
+    const unregister = registerPendingSave(() => saver.flush());
+    saver.schedule("typed just now");
+    await flushPendingSaves();
+    expect(save).toHaveBeenCalledWith("typed just now");
+    expect(saver.status).toBe("saved");
+    unregister();
+  });
+
+  it("waits for a save that is already in flight", async () => {
+    let finish!: () => void;
+    const save = vi.fn(() => new Promise<void>((r) => (finish = r)));
+    const saver = createAutosaver(save, { delayMs: 10 });
+    const unregister = registerPendingSave(() => saver.flush());
+    saver.schedule(1);
+    await vi.advanceTimersByTimeAsync(10);
+    let done = false;
+    const flushed = flushPendingSaves().then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(done).toBe(false);
+    finish();
+    await flushed;
+    expect(saver.status).toBe("saved");
+    unregister();
+  });
+
+  it("skips unregistered autosavers", async () => {
+    const flush = vi.fn().mockResolvedValue(undefined);
+    registerPendingSave(flush)();
+    await flushPendingSaves();
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("gives up after the timeout, and never rejects", async () => {
+    const unregisterHung = registerPendingSave(() => new Promise<void>(() => {}));
+    const unregisterBroken = registerPendingSave(() => {
+      throw new Error("broken");
+    });
+    let done = false;
+    const flushed = flushPendingSaves(1000).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(flushed).resolves.toBe(true);
+    unregisterHung();
+    unregisterBroken();
   });
 });

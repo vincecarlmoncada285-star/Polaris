@@ -16,5 +16,15 @@ export default defineConfig({
     url: "http://localhost:3100",
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
+    // CI runs from a clean checkout with no .env. These test-only values are passed to both
+    // the build and the server, and win over anything in a local .env.
+    env: {
+      AUTH_SECRET: "polaris-e2e-only-secret-not-for-real-deployments",
+      AUTH_TRUST_HOST: "true",
+      // The tests play the part of one reverse proxy: each browser context sends the
+      // X-Forwarded-For "its proxy" would have appended (e2e/helpers.ts, switchToFreshIp), so
+      // the per-IP rate limits see distinct clients. Without this the header is ignored.
+      TRUSTED_PROXY_HOPS: "1",
+    },
   },
 });

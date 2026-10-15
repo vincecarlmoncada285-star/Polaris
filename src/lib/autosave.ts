@@ -14,6 +14,28 @@ export interface Autosaver<T> {
  * newest value. If a save is in flight when another is due, the newer value is
  * saved right after it finishes.
  */
+// Flushes of mounted autosavers, run before the session ends. Signing out clears the cookie
+// before the editor unmounts, so a save left for its unmount cleanup would get a 401.
+const pendingSaves = new Set<() => Promise<void>>();
+
+/** Registers a flush to run before sign-out. Returns a function that unregisters it. */
+export function registerPendingSave(flush: () => Promise<void>): () => void {
+  pendingSaves.add(flush);
+  return () => void pendingSaves.delete(flush);
+}
+
+/**
+ * Runs every registered flush and resolves when they have all settled, or after `timeoutMs`
+ * so that a hung request cannot stop the writer signing out. Never rejects.
+ */
+export async function flushPendingSaves(timeoutMs = 5000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)));
+  const all = Promise.allSettled([...pendingSaves].map(async (flush) => flush()));
+  await Promise.race([all, timeout]);
+  clearTimeout(timer);
+}
+
 export function createAutosaver<T>(
   save: (value: T) => Promise<void>,
   { delayMs = 800, onStatus }: { delayMs?: number; onStatus?: (status: SaveStatus) => void } = {},

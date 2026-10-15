@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { signUp } from "./helpers";
+
+test.beforeEach(async ({ page }) => {
+  await signUp(page);
+});
 
 test("create a document, get feedback, apply it, and persist", async ({ page }) => {
   await page.goto("/");
