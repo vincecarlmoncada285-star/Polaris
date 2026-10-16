@@ -1,23 +1,26 @@
 "use client";
 
-import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
+import { EditorContent, useEditor, type Editor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
 import type { DocumentDTO } from "@/lib/documents/service";
 import type { UpdateDocumentInput, WritingGoals } from "@/lib/documents/schema";
+import { createAiScheduler, type AiScheduler, type AiStatus } from "@/lib/editor/ai-scheduler";
 import {
   Suggestions,
   activateSuggestion,
   applySuggestion,
   dismissSuggestion,
   recheckSuggestions,
+  setExternalMatches,
   type Suggestion,
 } from "@/lib/editor/suggestions";
+import { collectTextBlocks } from "@/lib/editor/textblocks";
 import { countCharacters, countWords, readingMinutes } from "@/lib/text/stats";
 import { GoalsDialog } from "./GoalsDialog";
-import { SuggestionPanel } from "./SuggestionPanel";
+import { SuggestionPanel, type AiPanelState } from "./SuggestionPanel";
 import { Toolbar } from "./Toolbar";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
@@ -30,6 +33,14 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
 
 const BLOCK_SEPARATOR = "\n\n";
 
+/** Whether this writer gets AI suggestions here: their setting, and whether the server can. */
+interface AiAvailability {
+  enabled: boolean;
+  configured: boolean;
+}
+
+const paragraphTexts = (editor: Editor) => collectTextBlocks(editor.state.doc).map((b) => b.text);
+
 export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const [title, setTitle] = useState(doc.title === "Untitled document" ? "" : doc.title);
   const [goals, setGoals] = useState<WritingGoals>(doc.goals);
@@ -38,10 +49,28 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const [text, setText] = useState(doc.plainText);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [ai, setAi] = useState<AiAvailability | null>(null);
+  const [aiLookupFailed, setAiLookupFailed] = useState(false);
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ kind: "idle" });
 
   // Rules read goals through a ref, so changing them does not rebuild the editor.
   const goalsRef = useRef(goals);
   goalsRef.current = goals;
+  const titleRef = useRef(title);
+  titleRef.current = title;
+
+  // Present only while AI suggestions are on and the server can provide them.
+  const schedulerRef = useRef<AiScheduler | null>(null);
+  const feedScheduler = useCallback((editor: Editor) => {
+    schedulerRef.current?.update({
+      paragraphs: paragraphTexts(editor),
+      goals: goalsRef.current,
+      title: titleRef.current,
+    });
+  }, []);
+  // The paragraphs as the document was opened (or as they stood when AI was switched back on).
+  // Only text the writer then writes or changes is sent to Claude, as the Settings page says.
+  const loadedParagraphs = useRef<string[] | null>(null);
 
   // Accumulate every field touched since the last save, so a title edit is not lost
   // behind a content edit that happens to be scheduled later.
@@ -92,6 +121,9 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
       }),
     ],
     content: (doc.content as JSONContent | null) ?? undefined,
+    onCreate: ({ editor }) => {
+      loadedParagraphs.current ??= paragraphTexts(editor);
+    },
     editorProps: {
       attributes: {
         class: "polaris-prose",
@@ -103,8 +135,108 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
       const plainText = editor.getText({ blockSeparator: BLOCK_SEPARATOR });
       setText(plainText);
       queueSave({ content: editor.getJSON(), plainText });
+      feedScheduler(editor);
     },
   });
+
+  // The AI setting lives in the database and the key on the server, so ask when the editor
+  // opens (and once more a little later if that fails), and again whenever the writer comes
+  // back to the tab: they may have switched AI on or off in Settings in another one.
+  useEffect(() => {
+    let cancelled = false;
+    let loading = false;
+    let attempts = 0;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      if (cancelled || loading) return;
+      loading = true;
+      attempts++;
+      fetch("/api/me", { cache: "no-store" })
+        .then((res) => {
+          if (!res.ok) throw new Error(`GET /api/me: ${res.status}`);
+          return res.json() as Promise<{ aiEnabled?: boolean; aiConfigured?: boolean } | null>;
+        })
+        .then((me) => {
+          if (cancelled) return;
+          const enabled = !!me?.aiEnabled;
+          const configured = !!me?.aiConfigured;
+          // A scheduler that stopped on a 403 or 503 stays stopped; build a new one if the
+          // server now says AI works (switched off and on again elsewhere, say).
+          const stopped = schedulerRef.current?.status.kind === "unavailable";
+          // An unchanged answer keeps the same object, so the scheduler (its cache and its
+          // requests in flight) carries on.
+          setAi((prev) =>
+            prev?.enabled === enabled &&
+            prev.configured === configured &&
+            !(stopped && enabled && configured)
+              ? prev
+              : { enabled, configured },
+          );
+          setAiLookupFailed(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAiLookupFailed(true);
+          if (attempts === 1) retry = setTimeout(load, 5000);
+        })
+        .finally(() => {
+          loading = false;
+        });
+    };
+    const onReturn = () => document.visibilityState === "visible" && load();
+    load();
+    window.addEventListener("focus", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => {
+      cancelled = true;
+      clearTimeout(retry);
+      window.removeEventListener("focus", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
+    };
+  }, []);
+
+  // Paragraph text goes to the server only from here, and only when the writer turned AI on.
+  useEffect(() => {
+    if (!editor || !ai) return;
+    if (!ai.enabled || !ai.configured) {
+      // What the writer writes now, they write with AI off. If AI comes on later in this visit
+      // (switched on in another tab), the document as it then stands counts as opened, as
+      // after a reload: only what they change from then on is sent.
+      loadedParagraphs.current = null;
+      return;
+    }
+    const scheduler = createAiScheduler({
+      fetch: (url, init) => fetch(url, init),
+      loaded: loadedParagraphs.current ?? paragraphTexts(editor),
+      // Results can arrive while the editor is mid-update (an undo back to text that is
+      // already cached), so dispatch after it finishes.
+      onResults: (matches) =>
+        queueMicrotask(() => {
+          if (!editor.isDestroyed) setExternalMatches(editor.view, matches);
+        }),
+      onStatus: setAiStatus,
+    });
+    // The same goes for a scheduler that replaces this one (AI switched off and on again).
+    loadedParagraphs.current = null;
+    schedulerRef.current = scheduler;
+    feedScheduler(editor);
+    return () => {
+      scheduler.dispose();
+      schedulerRef.current = null;
+      // Its last status ("off", say) is not the next scheduler's.
+      setAiStatus({ kind: "idle" });
+      if (!editor.isDestroyed) setExternalMatches(editor.view, new Map());
+    };
+  }, [editor, ai, feedScheduler]);
+
+  // The server first: on one without a key, pointing the writer to Settings would be a dead end.
+  const aiPanel: AiPanelState = !ai
+    ? { kind: aiLookupFailed ? "unknown" : "loading" }
+    : !ai.configured
+      ? { kind: "not_configured" }
+      : !ai.enabled
+        ? { kind: "off" }
+        : { kind: "on", status: aiStatus };
 
   // Save whatever is queued when the tab is hidden or closed, and before signing out (which
   // ends the session before this component unmounts).
@@ -157,7 +289,9 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
             maxLength={200}
             onChange={(e) => {
               setTitle(e.target.value);
+              titleRef.current = e.target.value;
               queueSave({ title: e.target.value });
+              if (editor) feedScheduler(editor);
             }}
             className="mb-6 w-full bg-transparent font-serif text-3xl font-semibold outline-none placeholder:text-muted/60"
           />
@@ -174,6 +308,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
         <SuggestionPanel
           suggestions={suggestions}
           activeKey={activeKey}
+          ai={aiPanel}
           onActivate={(s) => {
             if (!editor) return;
             activateSuggestion(editor.view, s?.key ?? null);
@@ -202,7 +337,10 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
           goalsRef.current = next;
           setGoalsOpen(false);
           queueSave({ goals: next });
-          if (editor) recheckSuggestions(editor.view);
+          if (editor) {
+            recheckSuggestions(editor.view);
+            feedScheduler(editor);
+          }
         }}
       />
     </div>

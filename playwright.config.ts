@@ -25,6 +25,10 @@ export default defineConfig({
       // X-Forwarded-For "its proxy" would have appended (e2e/helpers.ts, switchToFreshIp), so
       // the per-IP rate limits see distinct clients. Without this the header is ignored.
       TRUSTED_PROXY_HOPS: "1",
+      // No Anthropic credentials, whatever the shell or a local .env holds: the e2e server can
+      // never call Claude. The AI tests intercept /api/ai/paragraph in the browser instead.
+      ANTHROPIC_API_KEY: "",
+      ANTHROPIC_AUTH_TOKEN: "",
     },
   },
 });

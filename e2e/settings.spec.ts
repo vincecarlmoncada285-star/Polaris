@@ -9,7 +9,12 @@ test("the AI setting persists across a reload", async ({ page }) => {
 
   const toggle = page.getByRole("switch", { name: "AI suggestions" });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect(toggle).toHaveAccessibleDescription(/sends the paragraph you are working on/);
+  await expect(toggle).toHaveAccessibleDescription(/sends each paragraph you write or edit/);
+  await expect(toggle).toHaveAccessibleDescription(
+    /Opening a document sends nothing until you change it/,
+  );
+  // The e2e server has no Anthropic key, and the page says so.
+  await expect(toggle).toHaveAccessibleDescription(/aren’t set up on this server/);
 
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");

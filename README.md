@@ -18,6 +18,10 @@ npm run db:push      # create the local SQLite database
 npm run dev          # http://localhost:3000, then create an account at /signup
 ```
 
+AI suggestions are optional: set `ANTHROPIC_API_KEY` in `.env` to offer them (see
+[How feedback works](#how-feedback-works)). Without a key everything else works, and the editor
+says that AI suggestions aren’t set up on this server.
+
 `.env` is gitignored; `.env.example` lists every variable and is committed.
 
 Upgrading a local database created before accounts existed? `db:push` cannot add the required
@@ -45,9 +49,49 @@ Polaris uses two layers:
 1. **Rules (built).** Fast, deterministic checks in `src/lib/rules/` run on each paragraph
    as you type. Results are cached by paragraph text, so only the paragraph you are editing
    is rechecked.
-2. **AI (planned, Phase 3).** Per-paragraph suggestions from Claude for issues rules can't
-   catch, such as hedging, argument flow, and unsupported claims. Off unless the writer turns
-   on **AI suggestions** in Settings.
+2. **AI (built, opt-in).** Per-paragraph suggestions from Claude for what rules can't catch:
+   hedging and overclaiming, unsupported claims, vague referents ("this", "it"), weak logical
+   connections, awkward or ambiguous sentences, register slips and tense inconsistency. They
+   show as cards with an **AI** badge and dashed underlines, next to the rule suggestions;
+   where the two overlap, the rule's suggestion wins. Claude is told not to repeat what the
+   rules already check, never to add facts or citations, and to prefer minimal edits; when a
+   fix needs the writer's own judgement it explains what to do instead of offering a
+   replacement. Nothing is ever applied without the writer choosing it.
+   - **Off unless the writer turns it on.** Nothing is sent to Anthropic unless the writer
+     switches on **AI suggestions** in Settings (checked against the database on every
+     request) and the server has an Anthropic key.
+   - **What is sent, and when.** Only paragraphs the writer writes or changes: opening a
+     document sends nothing. A paragraph of at least 8 words (and at most 4,000 characters) is
+     sent to the Claude API once the writer has left it unchanged for 1.5 seconds, with the
+     writing goals, the document title and the paragraph before it (as context, not to be
+     reviewed). Editing one paragraph sends only that one, and text that was already checked
+     (after an undo, say) is not sent again. A request is cancelled as soon as its paragraph
+     changes again, at most two are in flight, and the paragraph edited last goes first. A
+     request that fails is tried again after 30 seconds, then after longer waits. The Settings
+     switch says all this before the writer turns it on. Polaris never logs paragraph text,
+     prompts or Claude's output.
+   - **Model.** `claude-opus-5-5` by default, at effort `low` (paragraph feedback runs often
+     and should be quick). Responses use structured outputs and are checked before they are
+     shown: at most 6 suggestions, each anchored to text that really is in the paragraph.
+   - **Refusals.** Requests opt in to Anthropic's server-side refusal fallback
+     (`fallbacks: "default"`): if the model declines a paragraph, the API retries it on a
+     fallback model. If every model declines, the paragraph just gets no AI suggestions.
+     Haiku models have no server-side fallback, so it is left off for them.
+   - **Rate limits.** Per writer, in memory per server process: 30 requests a minute and 600
+     a day. Answers served from the cache do not count. When a limit is reached, the editor
+     pauses AI suggestions for as long as the server says, and says until when if it is more
+     than a few minutes.
+   - **Caching.** The server keeps answers in memory for 24 hours (up to 2,000), keyed by a
+     SHA-256 hash of the model, effort, prompt version, goals, title, previous paragraph and
+     paragraph text; the browser keeps the session's answers by goals and text, so undoing
+     back to text that was already checked costs nothing. The system prompt is marked for
+     Anthropic's prompt caching.
+
+   | Variable                      | Default           | What it does                                     |
+   | ----------------------------- | ----------------- | ------------------------------------------------ |
+   | `ANTHROPIC_API_KEY`           | (none)            | Enables AI suggestions. Stays on the server.     |
+   | `POLARIS_AI_MODEL`            | `claude-opus-5-5` | The Claude model for paragraph suggestions.      |
+   | `POLARIS_AI_PARAGRAPH_EFFORT` | `low`             | `low`, `medium` or `high`: depth versus latency. |
 
 Suggestions fall into five categories: correctness, clarity, concision, formality and
 citations. Citation rules follow the style chosen under **Goals** (APA by default).
@@ -111,7 +155,7 @@ it); `src/auth.ts` adds what needs Node (Prisma, bcrypt) and merges in the provi
       per-user documents, settings. The database stays SQLite, which suits a single self-hosted
       server; for serverless hosting, whose filesystem does not persist, change `provider` in
       `prisma/schema.prisma` to `"postgresql"` and point `DATABASE_URL` at a Postgres server.
-- [ ] Phase 3: LLM suggestions (schema-validated, cached, cancellable)
+- [x] Phase 3: LLM suggestions (schema-validated, cached, cancellable)
 - [ ] Phase 4: overview panel and scores
 - [ ] Phase 5: whole-document review
 - [ ] Phase 7: import/export (.docx, Markdown), polish

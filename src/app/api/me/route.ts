@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { signOut } from "@/auth";
+import { isAiConfigured } from "@/lib/ai/client";
 import { requireUser } from "@/lib/auth/session";
 import { users } from "@/lib/users";
 import { deleteAccountSchema, emailSchema, updateProfileSchema } from "@/lib/users/schema";
@@ -10,7 +11,8 @@ export async function GET() {
   const userId = await requireUser();
   if (userId instanceof NextResponse) return userId;
   const user = await users.getUser(userId);
-  return user ? NextResponse.json(user) : unauthorized();
+  // aiConfigured lets the editor say why AI suggestions are unavailable.
+  return user ? NextResponse.json({ ...user, aiConfigured: isAiConfigured() }) : unauthorized();
 }
 
 export async function PATCH(req: Request) {

@@ -4,10 +4,21 @@ import { useState } from "react";
 import { errorMessage, patchMe } from "./api";
 import { SectionCard } from "./SectionCard";
 
+// Must describe exactly what the editor sends (src/lib/editor/ai-scheduler.ts, DocumentEditor).
 export const AI_EXPLANATION =
-  "When on, Polaris sends the paragraph you are working on to Anthropic's Claude API to generate suggestions. Polaris does not store that text anywhere except in your documents.";
+  "When on, Polaris sends each paragraph you write or edit to Anthropic's Claude API for suggestions, with the document title and the paragraph before it as context. Opening a document sends nothing until you change it. Polaris keeps Claude's suggestions in server memory for up to 24 hours, and stores your text only in your documents.";
 
-export function AiToggle({ enabled: initial }: { enabled: boolean }) {
+export const AI_NOT_CONFIGURED =
+  "AI suggestions aren’t set up on this server, so this setting has no effect for now.";
+
+export function AiToggle({
+  enabled: initial,
+  configured,
+}: {
+  enabled: boolean;
+  /** Whether the server has Anthropic credentials. */
+  configured: boolean;
+}) {
   const [enabled, setEnabled] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
@@ -35,9 +46,10 @@ export function AiToggle({ enabled: initial }: { enabled: boolean }) {
   return (
     <SectionCard id="ai" title="AI suggestions">
       <div className="flex items-start justify-between gap-4">
-        <p id="ai-description" className="min-w-0 text-sm text-muted">
-          {AI_EXPLANATION}
-        </p>
+        <div className="min-w-0 space-y-2 text-sm text-muted">
+          <p id="ai-description">{AI_EXPLANATION}</p>
+          {!configured && <p id="ai-server-note">{AI_NOT_CONFIGURED}</p>}
+        </div>
         {/* Named by the section heading. aria-disabled rather than disabled, so focus stays
             on the switch while saving. */}
         <button
@@ -45,7 +57,7 @@ export function AiToggle({ enabled: initial }: { enabled: boolean }) {
           role="switch"
           aria-checked={enabled}
           aria-labelledby="ai-heading"
-          aria-describedby="ai-description"
+          aria-describedby={configured ? "ai-description" : "ai-description ai-server-note"}
           aria-disabled={saving || undefined}
           onClick={toggle}
           className="flex shrink-0 items-center gap-2 rounded-full text-sm font-medium"
