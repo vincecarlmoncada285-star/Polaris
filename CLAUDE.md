@@ -1,7 +1,7 @@
 # Polaris: notes for Claude
 
 Academic writing assistant. Next.js 15 (App Router) + TypeScript (strict) + Tailwind v4 +
-TipTap 2 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
+TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
 
 ## Commands
 

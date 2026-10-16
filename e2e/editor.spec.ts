@@ -61,3 +61,22 @@ test("goals change which citation rules apply", async ({ page }) => {
   await page.getByRole("button", { name: "Save goals" }).click();
   await expect(mla).toHaveCount(1);
 });
+
+test("toolbar pressed states follow the cursor, not only typing", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New document" }).click();
+  await page.waitForURL(/\/documents\//);
+  const body = page.getByLabel("Document body");
+  const bold = page.getByRole("button", { name: "Bold" });
+  await body.click();
+  await page.keyboard.type("plain ");
+  await bold.click();
+  await page.keyboard.type("strong");
+  await expect(bold).toHaveAttribute("aria-pressed", "true");
+
+  // Moving the cursor back into plain text changes no content, only the selection.
+  await body.getByText("plain").click({ position: { x: 2, y: 5 } });
+  await expect(bold).toHaveAttribute("aria-pressed", "false");
+  await body.locator("strong").click();
+  await expect(bold).toHaveAttribute("aria-pressed", "true");
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Editor } from "@tiptap/react";
+import { useEditorState, type Editor } from "@tiptap/react";
 
 interface Item {
   label: string;
@@ -73,6 +73,12 @@ const ITEMS: (Item | "sep")[] = [
 ];
 
 export function Toolbar({ editor }: { editor: Editor }) {
+  // TipTap 3 does not re-render on every transaction, so subscribe to the pressed states
+  // (they change when the cursor moves into bold text, not only when the text changes).
+  const active = useEditorState({
+    editor,
+    selector: ({ editor: e }) => ITEMS.map((item) => (item === "sep" ? false : item.isActive(e))),
+  });
   return (
     <div
       role="toolbar"
@@ -88,10 +94,10 @@ export function Toolbar({ editor }: { editor: Editor }) {
             type="button"
             title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
             aria-label={item.label}
-            aria-pressed={item.isActive(editor)}
+            aria-pressed={active[i]}
             onClick={() => item.run(editor)}
             className={`min-w-8 rounded px-2 py-1 text-sm font-medium ${
-              item.isActive(editor)
+              active[i]
                 ? "bg-accent-soft text-accent"
                 : "text-muted hover:bg-background hover:text-foreground"
             } ${item.icon === "I" ? "italic" : ""} ${item.icon === "U" ? "underline" : ""}`}

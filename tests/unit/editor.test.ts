@@ -14,7 +14,8 @@ import {
 function makeEditor(html: string) {
   let latest: Suggestion[] = [];
   const editor = new Editor({
-    element: undefined,
+    // TipTap 3 only creates the view (and runs plugin views) for a mounted editor.
+    element: document.createElement("div"),
     extensions: [StarterKit, Suggestions.configure({ onChange: (s) => (latest = s) })],
     content: html,
   });

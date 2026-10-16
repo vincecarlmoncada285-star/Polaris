@@ -2,8 +2,7 @@
 
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Placeholder from "@tiptap/extension-placeholder";
-import Underline from "@tiptap/extension-underline";
+import { Placeholder } from "@tiptap/extensions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
 import type { DocumentDTO } from "@/lib/documents/service";
@@ -81,8 +80,8 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
-      Underline,
+      // StarterKit 3 bundles Underline. Links stay off until there is UI to add and edit them.
+      StarterKit.configure({ heading: { levels: [1, 2, 3] }, link: false }),
       Placeholder.configure({ placeholder: "Start writing, or paste a draft…" }),
       Suggestions.configure({
         getContext: () => ({ citationStyle: goalsRef.current.citationStyle }),
