@@ -1,15 +1,15 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import { feedbackCacheKey, paragraphFeedbackCache, type CachedFeedback } from "@/lib/ai/cache";
 import { aiModel, getAnthropicClient, isAiConfigured, paragraphEffort } from "@/lib/ai/client";
 import { aiLimits } from "@/lib/ai/limits";
-import { AiOutputError, PROMPT_VERSION, requestParagraphFeedback } from "@/lib/ai/paragraph";
+import { PROMPT_VERSION, requestParagraphFeedback } from "@/lib/ai/paragraph";
+import { paragraphRequestSchema, type ParagraphResponse } from "@/lib/ai/protocol";
 import {
-  paragraphRequestSchema,
-  type AiErrorBody,
-  type AiErrorCode,
-  type ParagraphResponse,
-} from "@/lib/ai/protocol";
+  errorResponse as fail,
+  retryAfterSeconds,
+  upstreamErrorResponse,
+  type UpstreamMessages,
+} from "@/lib/ai/route-errors";
 import { requireUser } from "@/lib/auth/session";
 import { users } from "@/lib/users";
 
@@ -49,68 +49,14 @@ async function readBody(req: Request, maxBytes: number): Promise<BodyRead> {
 }
 
 const UNAVAILABLE = "AI suggestions aren't set up on this server.";
-const UPSTREAM_FAILED = "AI suggestions are unavailable right now. Try again later.";
+const RATE_LIMITED = "Too many AI requests. Try again in a moment.";
 
-function fail(status: number, error: string, code?: AiErrorCode, headers?: HeadersInit) {
-  const body: AiErrorBody = code ? { error, code } : { error };
-  return NextResponse.json(body, { status, headers });
-}
-
-const retryAfterSeconds = (ms: number) => String(Math.max(1, Math.ceil(ms / 1000)));
-
-/**
- * What may be logged about a failed upstream call: a fixed label, the HTTP status and the
- * request id. Never the error message, the prompt or the model's output.
- */
-function logUpstream(
-  level: "warn" | "error",
-  label: string,
-  e?: InstanceType<typeof Anthropic.APIError>,
-) {
-  console[level]("[ai/paragraph]", label, {
-    status: e?.status ?? null,
-    requestId: e?.requestID ?? null,
-  });
-}
-
-/** Maps an error from the Claude call to a response, most specific class first. */
-function upstreamError(e: unknown, signal: AbortSignal): Response {
-  if (e instanceof Anthropic.APIUserAbortError || signal.aborted) {
-    // The writer edited the paragraph again (or left), so the client cancelled. Nobody is
-    // waiting for this response and nothing went wrong: no body, no log.
-    return new NextResponse(null, { status: 499 });
-  }
-  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
-    logUpstream(
-      "warn",
-      "Anthropic rejected the configured credentials; check ANTHROPIC_API_KEY",
-      e,
-    );
-    return fail(503, UNAVAILABLE, "ai_unavailable");
-  }
-  if (e instanceof Anthropic.RateLimitError) {
-    logUpstream("warn", "Anthropic rate limit reached", e);
-    const upstream = Number(e.headers?.get("retry-after"));
-    const seconds = Number.isFinite(upstream) && upstream > 0 ? String(Math.ceil(upstream)) : "30";
-    return fail(429, "Too many AI requests. Try again in a moment.", "rate_limited", {
-      "Retry-After": seconds,
-    });
-  }
-  if (e instanceof Anthropic.APIConnectionError) {
-    logUpstream("warn", "Could not reach the Anthropic API", e);
-    return fail(502, UPSTREAM_FAILED, "ai_error");
-  }
-  if (e instanceof Anthropic.APIError) {
-    logUpstream("error", "Anthropic API error", e);
-    return fail(502, UPSTREAM_FAILED, "ai_error");
-  }
-  if (e instanceof AiOutputError) {
-    console.warn("[ai/paragraph]", "Unusable model output", { reason: e.reason });
-    return fail(502, UPSTREAM_FAILED, "ai_error");
-  }
-  console.error("[ai/paragraph]", "Unexpected error while requesting feedback");
-  return fail(500, UPSTREAM_FAILED, "ai_error");
-}
+const UPSTREAM: UpstreamMessages = {
+  label: "[ai/paragraph]",
+  unavailable: UNAVAILABLE,
+  failed: "AI suggestions are unavailable right now. Try again later.",
+  rateLimited: RATE_LIMITED,
+};
 
 /**
  * Body: { text, goals, title?, previous? }. Claude's suggestions for one paragraph, anchored
@@ -172,7 +118,7 @@ export async function POST(req: Request) {
   // Only requests that will reach Claude count: a cached answer costs nothing.
   const limit = aiLimits.check(userId);
   if (!limit.ok) {
-    return fail(429, "Too many AI requests. Try again in a moment.", "rate_limited", {
+    return fail(429, RATE_LIMITED, "rate_limited", {
       "Retry-After": retryAfterSeconds(limit.retryAfterMs),
     });
   }
@@ -189,6 +135,6 @@ export async function POST(req: Request) {
     paragraphFeedbackCache.set(key, value);
     return NextResponse.json({ ...value, cached: false } satisfies ParagraphResponse);
   } catch (e) {
-    return upstreamError(e, req.signal);
+    return upstreamErrorResponse(e, req.signal, UPSTREAM);
   }
 }

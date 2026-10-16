@@ -8,31 +8,54 @@ datasource db {
 }
 
 model User {
-  id           String     @id @default(cuid())
+  id           String           @id @default(cuid())
   // Stored trimmed and lowercased (see src/lib/users/schema.ts).
-  email        String     @unique
+  email        String           @unique
   name         String?
   passwordHash String
-  // Opt-in: AI suggestions send paragraph text to the Claude API.
-  aiEnabled    Boolean    @default(false)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  // Opt-in: AI suggestions and reviews send document text to the Claude API.
+  aiEnabled    Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
   documents    Document[]
+  reviews      DocumentReview[]
 }
 
 model Document {
-  id        String   @id @default(cuid())
+  id        String           @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title     String   @default("Untitled document")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String           @default("Untitled document")
   // TipTap/ProseMirror JSON, serialized.
-  content   String   @default("{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}")
-  plainText String   @default("")
-  wordCount Int      @default(0)
+  content   String           @default("{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}")
+  plainText String           @default("")
+  wordCount Int              @default(0)
   // Writing goals (audience, citation style, etc.), serialized JSON.
-  goals     String   @default("{}")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  goals     String           @default("{}")
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  reviews   DocumentReview[]
 
   @@index([userId, updatedAt])
+}
+
+// A whole-document review by Claude. At most the 5 newest are kept per document.
+model DocumentReview {
+  id            String   @id @default(cuid())
+  documentId    String
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  // The model that answered (after any server-side fallback) and the prompt it was given.
+  model         String
+  promptVersion String
+  wordCount     Int
+  // sha256 of the reviewed text, block by block with heading levels (contentHash() in
+  // src/lib/documents/reviews.ts), so a later read can tell whether the document changed.
+  contentHash   String
+  // The cleaned review, serialized JSON (src/lib/ai/protocol.ts, ReviewResult).
+  result        String
+
+  @@index([documentId, createdAt])
 }

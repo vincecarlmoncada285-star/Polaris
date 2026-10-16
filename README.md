@@ -2,7 +2,9 @@
 
 An open-source writing companion for academic writing. Polaris underlines issues as you write (contractions,
 wordy phrases, passive voice, citation formatting, and more) and explains each one, so
-students learn the conventions instead of just accepting fixes.
+students learn the conventions instead of just accepting fixes. An **Overview** describes the
+draft with transparent writing metrics, and an optional **Review** by Claude gives formative
+feedback on the whole document.
 
 ![Polaris editor with suggestions](docs/screenshot.png)
 
@@ -24,7 +26,9 @@ says that AI suggestions aren’t set up on this server.
 
 `.env` is gitignored; `.env.example` lists every variable and is committed.
 
-Upgrading a local database created before accounts existed? `db:push` cannot add the required
+Upgrading from an earlier version? Run `npm run db:push` again: it adds new tables (such as
+the one for saved reviews) without touching your documents. Upgrading a local database created
+before accounts existed? `db:push` cannot add the required
 `Document.userId` column to existing rows, so reset it with `npx prisma db push --force-reset`
 (this deletes the local documents), then sign up again.
 
@@ -59,7 +63,9 @@ Polaris uses two layers:
    replacement. Nothing is ever applied without the writer choosing it.
    - **Off unless the writer turns it on.** Nothing is sent to Anthropic unless the writer
      switches on **AI suggestions** in Settings (checked against the database on every
-     request) and the server has an Anthropic key.
+     request) and the server has an Anthropic key. The same switch covers
+     [reviews](#review): asking for a review sends the whole document, its title and the
+     writing goals.
    - **What is sent, and when.** Only paragraphs the writer writes or changes: opening a
      document sends nothing. A paragraph of at least 8 words (and at most 4,000 characters) is
      sent to the Claude API once the writer has left it unchanged for 1.5 seconds, with the
@@ -90,11 +96,102 @@ Polaris uses two layers:
    | Variable                      | Default           | What it does                                     |
    | ----------------------------- | ----------------- | ------------------------------------------------ |
    | `ANTHROPIC_API_KEY`           | (none)            | Enables AI suggestions. Stays on the server.     |
-   | `POLARIS_AI_MODEL`            | `claude-opus-5-5` | The Claude model for paragraph suggestions.      |
+   | `POLARIS_AI_MODEL`            | `claude-opus-5-5` | The Claude model for suggestions and reviews.    |
    | `POLARIS_AI_PARAGRAPH_EFFORT` | `low`             | `low`, `medium` or `high`: depth versus latency. |
+   | `POLARIS_AI_REVIEW_EFFORT`    | `high`            | `low` to `max`: effort for a [review](#review).  |
 
 Suggestions fall into five categories: correctness, clarity, concision, formality and
 citations. Citation rules follow the style chosen under **Goals** (APA by default).
+
+The panel beside the editor has three tabs, **Suggestions | Overview | Review** (a WAI-ARIA
+tablist: Left and Right move between tabs, Home and End go to the first and last). The browser
+remembers the tab you last chose. Selecting an underline in the text always shows its card in
+**Suggestions** (without changing the tab the browser remembers). On a phone the panel sits
+below the editor.
+
+## Overview
+
+The **Overview** tab describes the draft with a few measures you can check by hand. They are
+computed in the browser (nothing is sent anywhere), about 300 ms after you stop typing (or
+after you turn a paragraph into a heading or back), and
+there is deliberately no single overall score: each number answers one question, and none of
+them says whether the writing is good.
+
+| Measure          | What it is                                                                                                                                | Limits                                                                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Words            | Every word, headings included (the footer's count).                                                                                       | A word is a run of letters or digits; "well-known" and "it's" are one word each.                                                                     |
+| Sentences        | Sentences in paragraphs, split at `.`, `!` and `?` (not after "e.g.", "et al.", "Fig. 2", initials and the like).                         | Headings are not sentences. A list item without a full stop counts as one sentence.                                                                  |
+| Paragraphs       | Non-empty blocks that are not headings (list items count).                                                                                |                                                                                                                                                      |
+| Reading time     | Words ÷ 200 a minute.                                                                                                                     | A typical pace for academic prose; dense material reads slower.                                                                                      |
+| Average sentence | Words per sentence.                                                                                                                       | Academic prose often averages 20 to 25 words; that is a guide, not a rule.                                                                           |
+| Sentence variety | The standard deviation of sentence length, in words.                                                                                      | Near 0 means every sentence is about the same length.                                                                                                |
+| Longest sentence | Its length in words; the button selects it in the text.                                                                                   | If you have rewritten it since, the panel says so.                                                                                                   |
+| Reading ease     | Flesch Reading Ease: 206.835 − 1.015 × words per sentence − 84.6 × syllables per word, with Flesch's bands ("difficult" for 30 to 50).    | Made for general prose. Academic writing usually scores as difficult, and that is normal. Shown from 100 words. Syllables are estimated (see below). |
+| Grade level      | Flesch–Kincaid Grade: 0.39 × words per sentence + 11.8 × syllables per word − 15.59, roughly a US school grade (13 and up is university). | Like reading ease, it measures only word and sentence length, not ideas or clarity.                                                                  |
+| Passive voice    | The share of sentences in which the passive-voice rule finds a passive ("was measured", "were chosen by").                                | The same heuristic as the rule: it can miss a passive with an unusual participle, and passive is often right in a methods section.                   |
+| Word variety     | MATTR (moving-average type-token ratio): the share of different words in every run of 50 words, averaged; plain TTR under 50 words.       | Unlike plain TTR it does not fall just because a text is longer. Repeating key terms is normal in academic writing and lowers it.                    |
+| Repeated openers | First words that open 3 or more sentences, the 3 most frequent, with counts.                                                              | Case is ignored. "The" opening many sentences is common; the count is a prompt to look, not a fault.                                                 |
+| Suggestions      | What is underlined now in each category (rule and AI suggestions, minus dismissed ones), with a rate per 1,000 words.                     | Counts, not a grade: one long sentence and one typo count the same. The bars are decoration; the numbers carry the meaning.                          |
+
+Syllables are counted with a heuristic, as every readability tool does: groups of vowels,
+corrected for a silent final "e" (but not "-le" after a consonant), silent "-es" and "-ed"
+endings, a silent "e" before "-ly", "-ment" and similar suffixes, and "ia"/"io" said as two
+syllables except in "-tion" and its kin. It is off by one on some words ("created",
+"science"), which mostly evens out over a document (`src/lib/text/metrics.ts`).
+
+**Target length.** Set **Target length (words)** under **Goals** (a whole number from 50 to
+200,000; optional). The Overview then shows a progress bar with the count in words, such as
+"1,240 of 2,000 words (62%)", and the footer shows "1,240 / 2,000 words". Going over the target
+is shown as plainly as falling short of it. The target is saved with the other goals, and
+reviews mention it only when a draft is far from it.
+
+## Review
+
+The **Review** tab asks Claude for formative feedback on the whole document, written as an
+experienced academic-writing instructor would give it: specific, kind and honest, grounded in
+your text, without rewriting it or inventing sources. A review has:
+
+- a two- or three-sentence summary of what the document argues, and an assessment of the thesis;
+- up to 5 **priorities**, most important first, each with a category (structure, argument,
+  evidence, clarity, style or citations) and usually a short quote: selecting the quote finds
+  that passage in your text as it is now and selects it (or says "(this passage has changed)");
+- up to 4 strengths, up to 8 notes on particular paragraphs or sections (selecting a paragraph
+  number jumps to it), and a few sentences each on structure, argument, evidence and style.
+
+Every quote is checked against the reviewed text on the server; a quote that is not really in
+it is dropped (the point it belongs to is kept). Nothing is ever applied to your text.
+
+- **What is sent, and when.** Only when you select **Review document** (or **Review again**),
+  only with **AI suggestions** switched on in Settings (checked against the database), and only
+  if the server has an Anthropic key. Polaris first saves your latest edits, then sends to the
+  Claude API: the whole document as saved (every paragraph, numbered `[P1]`, `[P2]`…, and its
+  headings, also listed as an outline), its title, your writing goals (document type, audience,
+  formality, citation style, target length) and its word and paragraph counts. The text is
+  marked as the student's writing, to be reviewed and never followed as instructions. Opening
+  the tab sends nothing to Claude: it only loads the last saved review from Polaris itself.
+- **Length.** From 150 to 60,000 words (and at most 600,000 characters), counted on exactly
+  the text that would be sent.
+- **Saved with the document.** Polaris keeps the 5 newest reviews of each document (deleted with
+  the document or the account), with the model that answered, the prompt version, the word
+  count and a SHA-256 hash of the reviewed text, block by block with which blocks are headings.
+  When it no longer matches (you edited the text, or turned a paragraph into a heading or back,
+  which renumbers the paragraphs), the tab says "You have edited the document since this
+  review." and offers **Review again**. **Review again** is also there under a review that is
+  still current, for when you have changed your writing goals or the title.
+- **Model.** The same model as paragraph suggestions (`POLARIS_AI_MODEL`, `claude-opus-5-5` by
+  default) at effort `high` (`POLARIS_AI_REVIEW_EFFORT`: `low`, `medium`, `high`, `xhigh` or
+  `max`). The answer is streamed (up to 64,000 output tokens, so a long document fits) and
+  checked against a schema; counts and lengths are enforced after it arrives. The system
+  prompt is marked for prompt caching. A review can take a minute or two; **Cancel** stops it,
+  and nothing is saved.
+- **Refusals.** As for paragraphs, the request opts in to the server-side refusal fallback
+  (not for Haiku). If every model declines, the tab says that Claude declined to review the
+  document, and the rest of Polaris carries on.
+- **Rate limits.** Per writer, in memory per server process: 6 reviews an hour and 30 a day.
+  Requests refused before reaching Claude (too short, AI off) do not count. When a limit is
+  reached, the tab says when you can ask again.
+- **Privacy.** Polaris never logs document text, prompts or Claude's output; a failed call
+  logs only a fixed label, the HTTP status and Anthropic's request id.
 
 ## Accounts
 
@@ -156,6 +253,8 @@ it); `src/auth.ts` adds what needs Node (Prisma, bcrypt) and merges in the provi
       server; for serverless hosting, whose filesystem does not persist, change `provider` in
       `prisma/schema.prisma` to `"postgresql"` and point `DATABASE_URL` at a Postgres server.
 - [x] Phase 3: LLM suggestions (schema-validated, cached, cancellable)
-- [ ] Phase 4: overview panel and scores
-- [ ] Phase 5: whole-document review
+- [x] Phase 4: overview panel: transparent writing metrics, suggestion counts and a word target
+      (no single overall score, by design)
+- [x] Phase 5: whole-document review by Claude (structured, saved per document, quotes that
+      jump back into the text)
 - [ ] Phase 7: import/export (.docx, Markdown), polish

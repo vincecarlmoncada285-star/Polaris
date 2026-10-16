@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const TARGET_WORDS_MIN = 50;
+export const TARGET_WORDS_MAX = 200_000;
+
 export const writingGoalsSchema = z
   .object({
     audience: z.enum(["expert", "knowledgeable", "general"]).optional(),
@@ -8,6 +11,8 @@ export const writingGoalsSchema = z
     documentType: z
       .enum(["essay", "research-paper", "thesis", "lab-report", "literature-review"])
       .optional(),
+    /** The length the writer is aiming for, in words. Shown as progress in the Overview. */
+    targetWords: z.number().int().min(TARGET_WORDS_MIN).max(TARGET_WORDS_MAX).optional(),
   })
   .strict();
 

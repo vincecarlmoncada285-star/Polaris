@@ -1,11 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { WritingGoals } from "@/lib/documents/schema";
-import { OBJECT_REPLACEMENT } from "@/lib/editor/textblocks";
 import { anchorSuggestions } from "./anchor";
 import { supportsServerSideFallback, type ParagraphEffort } from "./client";
 import type { AiSuggestion } from "./protocol";
 import { cleanFeedback, ParagraphFeedbackSchema, type ParagraphFeedback } from "./schema";
+import { AiOutputError, lenientOutputFormat, outputFromContent } from "./structured";
+import { createNeutralizer, PARAGRAPH_DATA_TAGS } from "./untrusted";
+
+export { AiOutputError };
 
 /**
  * Part of every cache key: bump it whenever SYSTEM_PROMPT, the user message layout or the
@@ -53,7 +55,10 @@ The student's text arrives inside tags. <paragraph> holds the paragraph to revie
 
 Write messages and explanations in the language of the paragraph.`;
 
-const GOAL_LABELS: { key: keyof WritingGoals; label: string; values: Record<string, string> }[] = [
+type GoalKey = Exclude<keyof WritingGoals, "targetWords">;
+
+/** How each goal is put to Claude. Shared with the review prompt. */
+export const GOAL_LABELS: { key: GoalKey; label: string; values: Record<string, string> }[] = [
   {
     key: "documentType",
     label: "Document type",
@@ -82,22 +87,11 @@ const GOAL_LABELS: { key: keyof WritingGoals; label: string; values: Record<stri
   },
 ];
 
-const DATA_TAGS = ["paragraph", "previous_paragraph", "document_title", "writing_goals"];
-// Whitespace and invisible format characters (zero-width spaces and joiners, soft hyphens)
-// between "<", "/" and the name do not stop a reader from seeing a tag.
-const GAP = "[\\s\\p{Cf}]*";
-const TAG_LIKE = new RegExp(`<(?=${GAP}/?${GAP}(?:${DATA_TAGS.join("|")})\\b)`, "giu");
-
 /**
- * Makes student text safe to place between our tags: the "<" of anything that looks like one
- * of them (opening or closing, any case or spacing) becomes "＜", so "</paragraph>" in an
- * essay cannot end the data block early. One character for one keeps offsets aligned, and
- * the anchoring treats "＜" as "<". Inline atoms go over as line breaks, and are turned into
- * them first, so "<" + hard break + "/paragraph>" is caught as the spaced tag it becomes.
+ * Makes student text safe to place between the paragraph prompt's tags: see
+ * createNeutralizer() in untrusted.ts, which the review prompt shares.
  */
-export function neutralizeStudentText(text: string): string {
-  return text.replaceAll(OBJECT_REPLACEMENT, "\n").replace(TAG_LIKE, "\uFF1C");
-}
+export const neutralizeStudentText = createNeutralizer(PARAGRAPH_DATA_TAGS);
 
 export interface ParagraphInput {
   text: string;
@@ -123,14 +117,6 @@ export function buildUserContent({ text, goals, title, previous }: ParagraphInpu
   return parts.join("\n\n");
 }
 
-/** Claude answered, but not with usable feedback. */
-export class AiOutputError extends Error {
-  constructor(readonly reason: "max_tokens" | "unparseable") {
-    super(`Unusable model output (${reason})`);
-    this.name = "AiOutputError";
-  }
-}
-
 export interface ParagraphResult {
   suggestions: AiSuggestion[];
   refused: boolean;
@@ -141,24 +127,8 @@ export interface ParagraphClient {
   beta: { messages: Pick<Anthropic["beta"]["messages"], "parse"> };
 }
 
-const strictFormat = betaZodOutputFormat(ParagraphFeedbackSchema);
-
-/**
- * The structured-output format, with a parse that returns null instead of throwing. The SDK
- * runs it over every text block before `parse()` returns, and a refusal, or a server-side
- * fallback hop (which keeps the declining model's partial text), usually carries text that is
- * not schema JSON: a throwing parse would turn those into errors before stop_reason is read.
- */
-const FEEDBACK_FORMAT = {
-  ...strictFormat,
-  parse(content: string): ParagraphFeedback | null {
-    try {
-      return strictFormat.parse(content);
-    } catch {
-      return null;
-    }
-  },
-};
+/** The structured-output format, with a parse that returns null instead of throwing. */
+const FEEDBACK_FORMAT = lenientOutputFormat(ParagraphFeedbackSchema);
 
 /**
  * The feedback in a finished answer: the text after the last `fallback` block (before it is
@@ -167,21 +137,7 @@ const FEEDBACK_FORMAT = {
 export function feedbackFromContent(
   content: ReadonlyArray<{ type: string; text?: string }>,
 ): ParagraphFeedback | null {
-  let start = 0;
-  content.forEach((block, i) => {
-    if (block.type === "fallback") start = i + 1;
-  });
-  const text = content
-    .slice(start)
-    .map((block) => (block.type === "text" ? (block.text ?? "") : ""))
-    .join("");
-  if (!text.trim()) return null;
-  try {
-    const parsed = ParagraphFeedbackSchema.safeParse(JSON.parse(text));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  return outputFromContent(content, ParagraphFeedbackSchema);
 }
 
 export function buildParagraphRequest(

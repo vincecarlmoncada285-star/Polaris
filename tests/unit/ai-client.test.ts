@@ -16,6 +16,7 @@ import {
   getAnthropicClient,
   isAiConfigured,
   paragraphEffort,
+  reviewEffort,
   supportsServerSideFallback,
 } from "@/lib/ai/client";
 
@@ -57,6 +58,36 @@ describe("paragraph effort", () => {
     // Warned at most once per process, so it cannot flood the logs.
     expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
   });
+});
+
+describe("review effort", () => {
+  it("defaults to high, not the model's own lower default", () => {
+    expect(reviewEffort({})).toBe("high");
+    expect(reviewEffort({ POLARIS_AI_REVIEW_EFFORT: "  " })).toBe("high");
+  });
+
+  it.each(["low", "medium", "high", "xhigh", "max", " MAX "])("accepts %j", (value) => {
+    expect(reviewEffort({ POLARIS_AI_REVIEW_EFFORT: value })).toBe(value.trim().toLowerCase());
+  });
+
+  it("is independent of the paragraph effort", () => {
+    expect(reviewEffort({ POLARIS_AI_PARAGRAPH_EFFORT: "low" })).toBe("high");
+    expect(paragraphEffort({ POLARIS_AI_REVIEW_EFFORT: "max" })).toBe("low");
+  });
+
+  it.each(["fast", "highest", "1"])(
+    "falls back to high for %j, warning once per process",
+    async (value) => {
+      // A fresh copy of the module, so its "already warned" flag starts unset.
+      vi.resetModules();
+      const fresh = await import("@/lib/ai/client");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(fresh.reviewEffort({ POLARIS_AI_REVIEW_EFFORT: value })).toBe("high");
+      expect(fresh.reviewEffort({ POLARIS_AI_REVIEW_EFFORT: value })).toBe("high");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("POLARIS_AI_REVIEW_EFFORT"));
+    },
+  );
 });
 
 describe("isAiConfigured", () => {

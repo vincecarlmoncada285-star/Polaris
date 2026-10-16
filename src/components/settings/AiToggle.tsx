@@ -4,9 +4,10 @@ import { useState } from "react";
 import { errorMessage, patchMe } from "./api";
 import { SectionCard } from "./SectionCard";
 
-// Must describe exactly what the editor sends (src/lib/editor/ai-scheduler.ts, DocumentEditor).
+// Must describe exactly what the editor sends (src/lib/editor/ai-scheduler.ts, DocumentEditor)
+// and what a review sends (ReviewPanel, src/app/api/documents/[id]/review/route.ts).
 export const AI_EXPLANATION =
-  "When on, Polaris sends each paragraph you write or edit to Anthropic's Claude API for suggestions, with the document title and the paragraph before it as context. Opening a document sends nothing until you change it. Polaris keeps Claude's suggestions in server memory for up to 24 hours, and stores your text only in your documents.";
+  "When on, Polaris sends each paragraph you write or edit to Anthropic's Claude API for suggestions, with the document title and the paragraph before it as context. Opening a document sends nothing until you change it. Asking for a review in the Review tab sends the whole document, its title and your writing goals. Polaris keeps Claude's suggestions in server memory for up to 24 hours, saves the five latest reviews of each document with it, and stores your text only in your documents.";
 
 export const AI_NOT_CONFIGURED =
   "AI suggestions aren’t set up on this server, so this setting has no effect for now.";

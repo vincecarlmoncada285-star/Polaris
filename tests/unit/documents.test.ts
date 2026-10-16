@@ -120,6 +120,24 @@ describe("document ownership", () => {
 });
 
 describe("update schema", () => {
+  it.each([50, 2000, 200_000])("accepts a word target of %i", (targetWords) => {
+    expect(updateDocumentSchema.safeParse({ goals: { targetWords } }).success).toBe(true);
+  });
+
+  it.each([49, 0, -100, 200_001, 1500.5, "2000", null])(
+    "rejects a word target of %j",
+    (targetWords) => {
+      expect(updateDocumentSchema.safeParse({ goals: { targetWords } }).success).toBe(false);
+    },
+  );
+
+  it("keeps the word target optional, and stores it with the other goals", async () => {
+    expect(updateDocumentSchema.safeParse({ goals: { citationStyle: "apa" } }).success).toBe(true);
+    const doc = await service.create(alice);
+    const updated = await service.update(alice, doc.id, { goals: { targetWords: 2000 } });
+    expect(updated?.goals).toEqual({ targetWords: 2000 });
+  });
+
   it("rejects unknown goal values", () => {
     expect(updateDocumentSchema.safeParse({ goals: { citationStyle: "harvard" } }).success).toBe(
       false,

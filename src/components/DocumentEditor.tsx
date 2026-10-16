@@ -4,7 +4,9 @@ import { EditorContent, useEditor, type Editor, type JSONContent } from "@tiptap
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { paragraphGoals } from "@/lib/ai/protocol";
 import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
+import { blocksLayout, reviewBlocks } from "@/lib/documents/blocks";
 import type { DocumentDTO } from "@/lib/documents/service";
 import type { UpdateDocumentInput, WritingGoals } from "@/lib/documents/schema";
 import { createAiScheduler, type AiScheduler, type AiStatus } from "@/lib/editor/ai-scheduler";
@@ -17,11 +19,23 @@ import {
   setExternalMatches,
   type Suggestion,
 } from "@/lib/editor/suggestions";
+import {
+  blockLayout,
+  findParagraph,
+  findSentence,
+  findTextInDoc,
+  metricsBlocks,
+  type DocRange,
+} from "@/lib/editor/locate";
 import { collectTextBlocks } from "@/lib/editor/textblocks";
 import { countCharacters, countWords, readingMinutes } from "@/lib/text/stats";
 import { GoalsDialog } from "./GoalsDialog";
+import { OverviewPanel } from "./OverviewPanel";
+import { PanelTabs, useRememberedTab } from "./PanelTabs";
+import { ReviewPanel } from "./ReviewPanel";
 import { SuggestionPanel, type AiPanelState } from "./SuggestionPanel";
 import { Toolbar } from "./Toolbar";
+import { formatNumber } from "@/lib/text/format";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "",
@@ -41,17 +55,31 @@ interface AiAvailability {
 
 const paragraphTexts = (editor: Editor) => collectTextBlocks(editor.state.doc).map((b) => b.text);
 
+const PANEL_TABS = ["suggestions", "overview", "review"] as const;
+type PanelTabId = (typeof PANEL_TABS)[number];
+/** localStorage key for the tab the writer last chose, in this browser. */
+export const PANEL_TAB_KEY = "polaris:panel-tab";
+
 export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const [title, setTitle] = useState(doc.title === "Untitled document" ? "" : doc.title);
   const [goals, setGoals] = useState<WritingGoals>(doc.goals);
   const [goalsOpen, setGoalsOpen] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [text, setText] = useState(doc.plainText);
+  // Which blocks are headings: from the saved document until the editor has it, then from the
+  // editor on every change. The same string either way, so a review loaded early is not stale.
+  const [layout, setLayout] = useState(() => blocksLayout(reviewBlocks(doc)));
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [ai, setAi] = useState<AiAvailability | null>(null);
   const [aiLookupFailed, setAiLookupFailed] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>({ kind: "idle" });
+  const [tab, setTab, showTab] = useRememberedTab<PanelTabId>(
+    PANEL_TAB_KEY,
+    PANEL_TABS,
+    "suggestions",
+  );
+  const activeKeyRef = useRef<string | null>(null);
 
   // Rules read goals through a ref, so changing them does not rebuild the editor.
   const goalsRef = useRef(goals);
@@ -64,7 +92,8 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const feedScheduler = useCallback((editor: Editor) => {
     schedulerRef.current?.update({
       paragraphs: paragraphTexts(editor),
-      goals: goalsRef.current,
+      // Without the word target: it does not change what Claude says about a paragraph.
+      goals: paragraphGoals(goalsRef.current),
       title: titleRef.current,
     });
   }, []);
@@ -106,6 +135,19 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     [autosaver],
   );
 
+  /**
+   * Saves everything now, for a review of the document as the writer sees it. A save that
+   * failed earlier left its fields queued for the next edit: they are retried here. False if
+   * the server still does not have the latest text.
+   */
+  const flushSave = useCallback(async () => {
+    if (autosaver.status === "error" && Object.keys(pending.current).length > 0) {
+      autosaver.schedule(pending.current);
+    }
+    await autosaver.flush();
+    return autosaver.status !== "error";
+  }, [autosaver]);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -117,12 +159,17 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
         onChange: (next, active) => {
           setSuggestions(next);
           setActiveKey(active);
+          // The writer just selected an underline in the text: its card is in the Suggestions
+          // tab, so show that tab (without remembering it as their choice). Focus stays put.
+          if (active !== null && active !== activeKeyRef.current) showTab("suggestions");
+          activeKeyRef.current = active;
         },
       }),
     ],
     content: (doc.content as JSONContent | null) ?? undefined,
     onCreate: ({ editor }) => {
       loadedParagraphs.current ??= paragraphTexts(editor);
+      setLayout(blockLayout(editor.state.doc));
     },
     editorProps: {
       attributes: {
@@ -134,6 +181,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     onUpdate: ({ editor }) => {
       const plainText = editor.getText({ blockSeparator: BLOCK_SEPARATOR });
       setText(plainText);
+      setLayout(blockLayout(editor.state.doc));
       queueSave({ content: editor.getJSON(), plainText });
       feedScheduler(editor);
     },
@@ -254,7 +302,22 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     };
   }, [autosaver]);
 
+  // Selects a range found by the Overview or the Review, and brings it to the middle of the
+  // screen (the editor's own scrolling only just reveals it).
+  const selectRange = useCallback(
+    (range: DocRange | null) => {
+      if (!editor || !range) return false;
+      editor.chain().setTextSelection(range).focus().run();
+      const { node } = editor.view.domAtPos(range.from);
+      const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return true;
+    },
+    [editor],
+  );
+
   const words = countWords(text);
+  const targetWords = goals.targetWords;
 
   return (
     <div className="mx-auto grid max-w-6xl gap-8 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -299,32 +362,89 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
         </article>
 
         <p className="mt-3 text-xs text-muted" data-testid="word-count">
-          {words.toLocaleString()} {words === 1 ? "word" : "words"} ·{" "}
-          {countCharacters(text).toLocaleString()} characters · {readingMinutes(words)} min read
+          {formatNumber(words)}
+          {targetWords ? ` / ${formatNumber(targetWords)}` : ""}{" "}
+          {words === 1 && !targetWords ? "word" : "words"} · {formatNumber(countCharacters(text))}{" "}
+          characters · {readingMinutes(words)} min read
         </p>
       </div>
 
-      <div className="lg:sticky lg:top-4 lg:h-[calc(100vh-6rem)]">
-        <SuggestionPanel
-          suggestions={suggestions}
-          activeKey={activeKey}
-          ai={aiPanel}
-          onActivate={(s) => {
-            if (!editor) return;
-            activateSuggestion(editor.view, s?.key ?? null);
-            if (s) {
-              editor.commands.setTextSelection(s.from);
-              editor.view.dom
-                .querySelector(`[data-suggestion-key="${CSS.escape(s.key)}"]`)
-                ?.scrollIntoView({ block: "center", behavior: "smooth" });
-            }
-          }}
-          onApply={(s, r) => {
-            if (!editor) return;
-            applySuggestion(editor.view, s, r);
-            editor.commands.focus();
-          }}
-          onDismiss={(s) => editor && dismissSuggestion(editor.view, s.key)}
+      <div className="flex flex-col lg:sticky lg:top-4 lg:h-[calc(100vh-6rem)]">
+        <PanelTabs
+          label="Writing tools"
+          idPrefix="panel"
+          selected={tab}
+          onSelect={setTab}
+          tabs={[
+            {
+              id: "suggestions",
+              label: "Suggestions",
+              panel: (
+                <SuggestionPanel
+                  suggestions={suggestions}
+                  activeKey={activeKey}
+                  ai={aiPanel}
+                  onActivate={(s) => {
+                    if (!editor) return;
+                    activateSuggestion(editor.view, s?.key ?? null);
+                    if (s) {
+                      editor.commands.setTextSelection(s.from);
+                      editor.view.dom
+                        .querySelector(`[data-suggestion-key="${CSS.escape(s.key)}"]`)
+                        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+                    }
+                  }}
+                  onApply={(s, r) => {
+                    if (!editor) return;
+                    applySuggestion(editor.view, s, r);
+                    editor.commands.focus();
+                  }}
+                  onDismiss={(s) => editor && dismissSuggestion(editor.view, s.key)}
+                />
+              ),
+            },
+            {
+              id: "overview",
+              label: "Overview",
+              panel: (
+                <OverviewPanel
+                  active={tab === "overview"}
+                  text={text}
+                  layout={layout}
+                  words={words}
+                  getBlocks={() => (editor ? metricsBlocks(editor.state.doc) : [])}
+                  suggestions={suggestions}
+                  targetWords={targetWords}
+                  onSelectSentence={(sentence) =>
+                    !!editor && selectRange(findSentence(editor.state.doc, sentence))
+                  }
+                  onEditGoals={() => setGoalsOpen(true)}
+                />
+              ),
+            },
+            {
+              id: "review",
+              label: "Review",
+              panel: (
+                <ReviewPanel
+                  documentId={doc.id}
+                  active={tab === "review"}
+                  ai={ai}
+                  aiLookupFailed={aiLookupFailed}
+                  words={words}
+                  text={text}
+                  layout={layout}
+                  flushSave={flushSave}
+                  onFindQuote={(quote) =>
+                    !!editor && selectRange(findTextInDoc(editor.state.doc, quote))
+                  }
+                  onFindParagraph={(n) =>
+                    !!editor && selectRange(findParagraph(editor.state.doc, n))
+                  }
+                />
+              ),
+            },
+          ]}
         />
       </div>
 

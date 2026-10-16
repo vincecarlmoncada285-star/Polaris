@@ -22,18 +22,42 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
   (only paragraphs changed since the document opened, 1.5 s idle, 8+ words, 2 in flight, last
   edit first, abort on change, client cache, stop on 403/503, 429 backoff, failures retried;
   fetch and timers injected). The Settings text (`AiToggle.tsx`) must match what it sends.
-- `src/lib/ai/`: Claude paragraph suggestions (server only, except `protocol.ts`).
+  `locate.ts` finds a measured sentence, a quoted passage (via `anchor.ts`) or the n-th
+  paragraph in the current doc, for the Overview and Review to select.
+- `src/lib/ai/`: Claude paragraph suggestions and document reviews (server only, except
+  `protocol.ts`).
   - `client.ts`: `import "server-only"`; lazy SDK client, `isAiConfigured()`, and the one place
-    that picks the model (`POLARIS_AI_MODEL`) and effort (`POLARIS_AI_PARAGRAPH_EFFORT`).
+    that picks the model (`POLARIS_AI_MODEL`) and effort (`POLARIS_AI_PARAGRAPH_EFFORT`,
+    `POLARIS_AI_REVIEW_EFFORT`, default high).
   - `paragraph.ts`: system prompt (keep it byte-stable; bump `PROMPT_VERSION` when it, the user
     message or the schema changes), user message, the `beta.messages.parse` request, refusal /
     max_tokens handling.
+  - `review.ts`: the whole-document review. Byte-stable `REVIEW_SYSTEM_PROMPT` (bump
+    `REVIEW_PROMPT_VERSION` when it, the user message or the schema changes); user message
+    (goals, title, outline, `[P1]`-numbered paragraphs in `<document>`); streamed request
+    (`beta.messages.stream` + `finalMessage()`, 64000 max_tokens, fallbacks as for paragraphs);
+    refusal -> `{ refused: true }`, max_tokens -> `AiOutputError`. `review-schema.ts`: its zod/v4
+    schema and `cleanReview()` (limits, quotes anchored to the plain text or dropped).
+  - `untrusted.ts`: the neutralizer for student text between our tags (`createNeutralizer(tags)`,
+    one tag list per prompt) and for `[P3]`-like markers. `structured.ts`: the non-throwing
+    output format, "text after the last fallback block" parsing, `AiOutputError`.
+    `route-errors.ts`: the SDK-error -> response mapping both AI routes share.
   - `schema.ts` (zod/v4 structured-output schema + clean-up), `anchor.ts` (quote -> offsets),
-    `cache.ts` (LRU + TTL, sha256 keys), `limits.ts` (30/min, 600/day per user),
-    `protocol.ts` (request schema and response types shared with the client; plain zod).
-  - Route: `src/app/api/ai/paragraph/route.ts`.
-- `src/lib/documents/`: zod schemas + service (takes a PrismaClient, so tests use a temp DB).
-  Every method takes `userId` first.
+    `cache.ts` (LRU + TTL, sha256 keys), `limits.ts` (30/min, 600/day per user for paragraphs;
+    6/hour, 30/day for reviews), `protocol.ts` (request schema and response types shared with
+    the client, review types and word limits; plain zod).
+  - Routes: `src/app/api/ai/paragraph/route.ts`; `src/app/api/documents/[id]/review/route.ts`
+    (POST runs and saves a review, `maxDuration = 300`; GET returns the latest with `stale`).
+- `src/lib/documents/`: zod schemas (goals include the optional `targetWords`) + service (takes
+  a PrismaClient, so tests use a temp DB). Every method takes `userId` first. `reviews.ts`:
+  saved reviews (`DocumentReview`), newest 5 per document, `contentHash()` (sha256 of the
+  reviewed blocks' text and heading levels) for staleness. `blocks.ts`: textblocks from the
+  stored TipTap JSON (`reviewBlocks()`: what a review sends, measures and hashes; never the
+  separately saved plainText), and the paragraph numbering both the review prompt and the
+  editor use.
+- `src/lib/text/`: `stats.ts` (word count, reading time) and `metrics.ts`, the Overview's pure
+  metrics (sentences via `splitSentences`, passive via the `passiveVoice` rule, Flesch scores
+  with a documented syllable heuristic, MATTR, repeated openers, longest-sentence offsets).
 - `src/lib/users/`: zod schemas + users service (create, verifyCredentials, profile, password,
   delete). Same PrismaClient-injection pattern.
 - Auth (Auth.js v5, Credentials + JWT sessions):
@@ -52,7 +76,14 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
 - `src/lib/autosave.ts`: debounced, serialized saver. Anything holding unsaved edits registers
   with `registerPendingSave()`; `SignOutButton` awaits `flushPendingSaves()` before the session
   cookie is cleared.
-- `src/components/`: React UI (`auth/`, `settings/`, `Navbar.tsx`).
+- `src/components/`: React UI (`auth/`, `settings/`, `Navbar.tsx`). The editor's side panel is
+  `PanelTabs.tsx` (WAI-ARIA tabs, roving tabindex, choice remembered in localStorage;
+  `useRememberedTab()` also returns `show()`, a switch that is not remembered, used to show
+  Suggestions when an underline is clicked) holding `SuggestionPanel.tsx`, `OverviewPanel.tsx`
+  (recomputes 300 ms after the text or the heading layout changes, only while shown) and
+  `ReviewPanel.tsx` (GET when shown, POST after flushing the autosaver, Cancel aborts, stale when
+  the editor text or heading layout differs from what was reviewed). The layout comes from
+  `blockLayout()` in `src/lib/editor/locate.ts`.
 
 ## Conventions
 
@@ -64,8 +95,12 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
   (cards carry the category label).
 - Keep `ANTHROPIC_API_KEY` server-side only. Never log document text.
 - Never send text to Claude unless the user has aiEnabled; never log prompts or model output;
-  tests mock the Anthropic client.
+  tests mock the Anthropic client. A review sends the whole document, its title and goals: the
+  Settings text and the Review tab must say so.
 - Every API route calls requireUser() first and scopes queries by userId; another user's resource is a 404.
+- Server-rendered numbers go through `formatNumber()` (`src/lib/text/format.ts`, fixed en-US locale)
+  and dates through `<LocalDateTime>`; the runtime's own locale or timezone would make the server
+  and browser text differ (a hydration mismatch). `e2e/locale.spec.ts` checks this.
 - E2E tests sign up a fresh user with `signUp()` from `e2e/helpers.ts` (it also gives each
   context its own IP via X-Forwarded-For, which the e2e server trusts because Playwright sets
   `TRUSTED_PROXY_HOPS=1`; by default the app ignores that header).

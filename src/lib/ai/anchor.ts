@@ -1,6 +1,7 @@
 import { OBJECT_REPLACEMENT } from "@/lib/editor/textblocks";
 import type { AiSuggestion } from "./protocol";
 import type { SuggestionDraft } from "./schema";
+import { NEUTRAL_LBRACKET, NEUTRAL_LT } from "./untrusted";
 
 /**
  * Text with typographic variants folded together, plus a map from each normalized character
@@ -23,7 +24,8 @@ const isSpace = (c: string) => /\s/.test(c) || c === OBJECT_REPLACEMENT;
 
 /**
  * Folds curly and straight quotes, every dash (and runs of them, so "--" matches "—"),
- * whitespace runs, "…" vs "...", and the "＜" that neutralizes tag-like text in the prompt.
+ * whitespace runs, "…" vs "...", and the "＜" and "［" that neutralize tag-like text and
+ * marker-like text in the prompts (src/lib/ai/untrusted.ts), so a quote of either is found.
  */
 function normalize(s: string): Normalized {
   let text = "";
@@ -54,7 +56,8 @@ function normalize(s: string): Normalized {
       if (c === "…") for (let k = 0; k < 3; k++) push(".", i, i + 1);
       else if (SINGLE_QUOTES.has(c)) push("'", i, i + 1);
       else if (DOUBLE_QUOTES.has(c)) push('"', i, i + 1);
-      else if (c === "＜") push("<", i, i + 1);
+      else if (c === NEUTRAL_LT) push("<", i, i + 1);
+      else if (c === NEUTRAL_LBRACKET) push("[", i, i + 1);
       else push(c, i, i + 1);
       i++;
     }

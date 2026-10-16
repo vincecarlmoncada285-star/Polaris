@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { DocumentSummary } from "@/lib/documents/service";
-
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+import { formatNumber } from "@/lib/text/format";
+import { LocalDateTime } from "./LocalDateTime";
 
 export function DocumentLibrary({ initialDocuments }: { initialDocuments: DocumentSummary[] }) {
   const router = useRouter();
@@ -69,8 +69,7 @@ export function DocumentLibrary({ initialDocuments }: { initialDocuments: Docume
                   {doc.excerpt || <em>Empty document</em>}
                 </p>
                 <p className="mt-2 text-xs text-muted">
-                  {doc.wordCount.toLocaleString()} words · edited{" "}
-                  {dateFormat.format(new Date(doc.updatedAt))}
+                  {formatNumber(doc.wordCount)} words · edited <LocalDateTime iso={doc.updatedAt} />
                 </p>
               </Link>
               <button

@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { WritingGoals } from "@/lib/documents/schema";
+import { TARGET_WORDS_MAX, TARGET_WORDS_MIN, type WritingGoals } from "@/lib/documents/schema";
+import { formatNumber } from "@/lib/text/format";
+
+type ChoiceKey = Exclude<keyof WritingGoals, "targetWords">;
 
 const FIELDS: {
-  key: keyof WritingGoals;
+  key: ChoiceKey;
   label: string;
   options: { value: string; label: string }[];
 }[] = [
@@ -61,12 +64,15 @@ export function GoalsDialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState(goals);
+  // As typed: the number input's own validation (min, max, step) blocks a bad value on submit.
+  const [target, setTarget] = useState(goals.targetWords?.toString() ?? "");
 
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
     if (open && !dialog.open) {
       setDraft(goals);
+      setTarget(goals.targetWords?.toString() ?? "");
       dialog.showModal();
     } else if (!open && dialog.open) {
       dialog.close();
@@ -80,7 +86,17 @@ export function GoalsDialog({
       aria-labelledby="goals-heading"
       className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-0 text-foreground backdrop:bg-black/40"
     >
-      <form method="dialog" onSubmit={() => onSave(draft)} className="space-y-4 p-6">
+      <form
+        method="dialog"
+        onSubmit={() => {
+          const words = target.trim() === "" ? undefined : Number(target);
+          const next = { ...draft };
+          if (words === undefined) delete next.targetWords;
+          else next.targetWords = words;
+          onSave(next);
+        }}
+        className="space-y-4 p-6"
+      >
         <div>
           <h2 id="goals-heading" className="text-lg font-semibold">
             Writing goals
@@ -106,6 +122,27 @@ export function GoalsDialog({
             </select>
           </label>
         ))}
+        <div className="text-sm">
+          {/* The hint sits outside the label: it is the field's description, not its name. */}
+          <label className="block">
+            <span className="font-medium">Target length (words)</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={TARGET_WORDS_MIN}
+              max={TARGET_WORDS_MAX}
+              step={1}
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              aria-describedby="target-words-hint"
+              className="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2"
+            />
+          </label>
+          <p id="target-words-hint" className="mt-1 text-xs text-muted">
+            Optional. A whole number from {TARGET_WORDS_MIN} to {formatNumber(TARGET_WORDS_MAX)};
+            the Overview shows your progress towards it.
+          </p>
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
