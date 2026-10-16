@@ -9,6 +9,8 @@ import { collectTextBlocks } from "./textblocks";
 export interface Suggestion extends RuleMatch {
   /** Stable across unrelated edits: rule + paragraph text + offset. */
   key: string;
+  /** The rule engine, or Claude (ruleId "ai"). */
+  source: "rules" | "ai";
   from: number;
   to: number;
   /** The paragraph's text, used to widen deletions. */
@@ -16,17 +18,22 @@ export interface Suggestion extends RuleMatch {
   blockFrom: number;
 }
 
+/** Matches computed elsewhere (Claude), keyed by the paragraph text they were computed for. */
+export type ExternalMatches = Map<string, RuleMatch[]>;
+
 interface PluginState {
   suggestions: Suggestion[];
   decorations: DecorationSet;
   dismissed: Set<string>;
   activeKey: string | null;
+  external: ExternalMatches;
 }
 
 type Meta =
   | { type: "dismiss"; key: string }
   | { type: "activate"; key: string | null }
-  | { type: "recheck" };
+  | { type: "recheck" }
+  | { type: "external"; matches: ExternalMatches };
 
 export const suggestionsKey = new PluginKey<PluginState>("polaris-suggestions");
 
@@ -36,21 +43,43 @@ function hash(s: string): string {
   return (h >>> 0).toString(36);
 }
 
+/**
+ * Adds external matches to a paragraph's rule matches. Rules win: an external match that
+ * overlaps a rule's underline (or an earlier external match) is dropped. Long-sentence spans
+ * do not count, as they cover whole sentences and are drawn differently, like in the engine.
+ */
+export function mergeMatches(text: string, rules: RuleMatch[], external: RuleMatch[]): RuleMatch[] {
+  if (external.length === 0) return rules;
+  const taken = rules.filter((m) => m.ruleId !== "long-sentence");
+  const merged = [...rules];
+  for (const match of external) {
+    if (match.start < 0 || match.end > text.length || match.end <= match.start) continue;
+    if (taken.some((t) => match.start < t.end && t.start < match.end)) continue;
+    taken.push(match);
+    merged.push(match);
+  }
+  return merged.sort((a, b) => a.start - b.start || b.end - a.end);
+}
+
 function computeSuggestions(
   state: EditorState | { doc: EditorState["doc"] },
   check: (text: string) => RuleMatch[],
+  external: ExternalMatches,
   dismissed: Set<string>,
 ): Suggestion[] {
   const out: Suggestion[] = [];
   for (const block of collectTextBlocks(state.doc)) {
     if (!block.text.trim()) continue;
     const blockHash = hash(block.text);
-    for (const match of check(block.text)) {
+    // Keyed by text, so a result only ever shows on the exact text it was computed for.
+    const matches = mergeMatches(block.text, check(block.text), external.get(block.text) ?? []);
+    for (const match of matches) {
       const key = `${match.ruleId}:${blockHash}:${match.start}-${match.end}`;
       if (dismissed.has(dismissKey(match, block.text))) continue;
       out.push({
         ...match,
         key,
+        source: match.ruleId === "ai" ? "ai" : "rules",
         from: block.posAt(match.start),
         to: block.posAt(match.end),
         blockText: block.text,
@@ -82,6 +111,7 @@ function buildDecorations(
             "polaris-suggestion",
             `polaris-suggestion--${s.category}`,
             s.ruleId === "long-sentence" ? "polaris-suggestion--span" : "",
+            s.source === "ai" ? "polaris-suggestion--ai" : "",
             s.key === activeKey ? "polaris-suggestion--active" : "",
           ]
             .filter(Boolean)
@@ -116,17 +146,19 @@ export const Suggestions = Extension.create<SuggestionsOptions>({
         state: {
           init(_config, state) {
             const dismissed = new Set<string>();
-            const suggestions = computeSuggestions(state, check, dismissed);
+            const external: ExternalMatches = new Map();
+            const suggestions = computeSuggestions(state, check, external, dismissed);
             return {
               suggestions,
               dismissed,
               activeKey: null,
+              external,
               decorations: buildDecorations(state.doc, suggestions, null),
             };
           },
           apply(tr: Transaction, prev, _old, state) {
             const meta = tr.getMeta(suggestionsKey) as Meta | undefined;
-            let { dismissed, activeKey } = prev;
+            let { dismissed, activeKey, external } = prev;
             if (meta?.type === "dismiss") {
               const target = prev.suggestions.find((s) => s.key === meta.key);
               if (target) {
@@ -136,18 +168,21 @@ export const Suggestions = Extension.create<SuggestionsOptions>({
               if (activeKey === meta.key) activeKey = null;
             } else if (meta?.type === "activate") {
               activeKey = meta.key;
+            } else if (meta?.type === "external") {
+              external = meta.matches;
             }
             if (!tr.docChanged && !meta) return prev;
 
             const suggestions =
               tr.docChanged || meta?.type !== "activate"
-                ? computeSuggestions(state, check, dismissed)
+                ? computeSuggestions(state, check, external, dismissed)
                 : prev.suggestions;
             if (activeKey && !suggestions.some((s) => s.key === activeKey)) activeKey = null;
             return {
               suggestions,
               dismissed,
               activeKey,
+              external,
               decorations: buildDecorations(state.doc, suggestions, activeKey),
             };
           },
@@ -216,6 +251,22 @@ export function activateSuggestion(
   key: string | null,
 ) {
   view.dispatch(view.state.tr.setMeta(suggestionsKey, { type: "activate", key }));
+}
+
+/**
+ * Shows matches computed outside the rule engine (Claude's), keyed by the paragraph text they
+ * were computed for: a paragraph whose text differs shows none of them. Replaces the
+ * previous set. Not an edit, so it stays out of the undo history.
+ */
+export function setExternalMatches(
+  view: { state: EditorState; dispatch: (tr: Transaction) => void },
+  matches: ExternalMatches,
+) {
+  view.dispatch(
+    view.state.tr
+      .setMeta(suggestionsKey, { type: "external", matches } satisfies Meta)
+      .setMeta("addToHistory", false),
+  );
 }
 
 /** Re-run all rules, e.g. after the writing goals (citation style) change. */

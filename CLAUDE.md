@@ -17,7 +17,20 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
   - `engine.ts`: runs rules, resolves overlaps, LRU cache keyed by context + text.
 - `src/lib/editor/`: ProseMirror bridge. `textblocks.ts` maps text offsets to doc positions
   (inline atoms count as U+FFFC); `suggestions.ts` is the TipTap extension (decorations,
-  dismissals, apply).
+  dismissals, apply; `setExternalMatches()` merges in AI matches, keyed by paragraph text, rules
+  win on overlap); `ai-scheduler.ts` is the framework-free client scheduler for AI requests
+  (1.5 s idle, 8+ words, 2 in flight, abort on change, client cache, stop on 403/503, 429
+  backoff; fetch and timers injected).
+- `src/lib/ai/`: Claude paragraph suggestions (server only, except `protocol.ts`).
+  - `client.ts`: `import "server-only"`; lazy SDK client, `isAiConfigured()`, and the one place
+    that picks the model (`POLARIS_AI_MODEL`) and effort (`POLARIS_AI_PARAGRAPH_EFFORT`).
+  - `paragraph.ts`: system prompt (keep it byte-stable; bump `PROMPT_VERSION` when it, the user
+    message or the schema changes), user message, the `beta.messages.parse` request, refusal /
+    max_tokens handling.
+  - `schema.ts` (zod/v4 structured-output schema + clean-up), `anchor.ts` (quote -> offsets),
+    `cache.ts` (LRU + TTL, sha256 keys), `limits.ts` (30/min, 600/day per user),
+    `protocol.ts` (request schema and response types shared with the client; plain zod).
+  - Route: `src/app/api/ai/paragraph/route.ts`.
 - `src/lib/documents/`: zod schemas + service (takes a PrismaClient, so tests use a temp DB).
   Every method takes `userId` first.
 - `src/lib/users/`: zod schemas + users service (create, verifyCredentials, profile, password,
@@ -49,6 +62,8 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
 - Accessibility: every control needs an accessible name; colour is never the only signal
   (cards carry the category label).
 - Keep `ANTHROPIC_API_KEY` server-side only. Never log document text.
+- Never send text to Claude unless the user has aiEnabled; never log prompts or model output;
+  tests mock the Anthropic client.
 - Every API route calls requireUser() first and scopes queries by userId; another user's resource is a 404.
 - E2E tests sign up a fresh user with `signUp()` from `e2e/helpers.ts` (it also gives each
   context its own IP via X-Forwarded-For, which the e2e server trusts because Playwright sets

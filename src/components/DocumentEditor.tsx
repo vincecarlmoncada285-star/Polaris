@@ -1,23 +1,26 @@
 "use client";
 
-import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
+import { EditorContent, useEditor, type Editor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
 import type { DocumentDTO } from "@/lib/documents/service";
 import type { UpdateDocumentInput, WritingGoals } from "@/lib/documents/schema";
+import { createAiScheduler, type AiScheduler, type AiStatus } from "@/lib/editor/ai-scheduler";
 import {
   Suggestions,
   activateSuggestion,
   applySuggestion,
   dismissSuggestion,
   recheckSuggestions,
+  setExternalMatches,
   type Suggestion,
 } from "@/lib/editor/suggestions";
+import { collectTextBlocks } from "@/lib/editor/textblocks";
 import { countCharacters, countWords, readingMinutes } from "@/lib/text/stats";
 import { GoalsDialog } from "./GoalsDialog";
-import { SuggestionPanel } from "./SuggestionPanel";
+import { SuggestionPanel, type AiPanelState } from "./SuggestionPanel";
 import { Toolbar } from "./Toolbar";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
@@ -30,6 +33,12 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
 
 const BLOCK_SEPARATOR = "\n\n";
 
+/** Whether this writer gets AI suggestions here: their setting, and whether the server can. */
+interface AiAvailability {
+  enabled: boolean;
+  configured: boolean;
+}
+
 export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const [title, setTitle] = useState(doc.title === "Untitled document" ? "" : doc.title);
   const [goals, setGoals] = useState<WritingGoals>(doc.goals);
@@ -38,10 +47,24 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const [text, setText] = useState(doc.plainText);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [ai, setAi] = useState<AiAvailability | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ kind: "idle" });
 
   // Rules read goals through a ref, so changing them does not rebuild the editor.
   const goalsRef = useRef(goals);
   goalsRef.current = goals;
+  const titleRef = useRef(title);
+  titleRef.current = title;
+
+  // Present only while AI suggestions are on and the server can provide them.
+  const schedulerRef = useRef<AiScheduler | null>(null);
+  const feedScheduler = useCallback((editor: Editor) => {
+    schedulerRef.current?.update({
+      paragraphs: collectTextBlocks(editor.state.doc).map((b) => b.text),
+      goals: goalsRef.current,
+      title: titleRef.current,
+    });
+  }, []);
 
   // Accumulate every field touched since the last save, so a title edit is not lost
   // behind a content edit that happens to be scheduled later.
@@ -103,8 +126,53 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
       const plainText = editor.getText({ blockSeparator: BLOCK_SEPARATOR });
       setText(plainText);
       queueSave({ content: editor.getJSON(), plainText });
+      feedScheduler(editor);
     },
   });
+
+  // The AI setting lives in the database and the key on the server, so ask once per visit.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((me: { aiEnabled?: boolean; aiConfigured?: boolean } | null) => {
+        if (!cancelled && me) setAi({ enabled: !!me.aiEnabled, configured: !!me.aiConfigured });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Paragraph text goes to the server only from here, and only when the writer turned AI on.
+  useEffect(() => {
+    if (!editor || !ai?.enabled || !ai.configured) return;
+    const scheduler = createAiScheduler({
+      fetch: (url, init) => fetch(url, init),
+      // Results can arrive while the editor is mid-update (an undo back to text that is
+      // already cached), so dispatch after it finishes.
+      onResults: (matches) =>
+        queueMicrotask(() => {
+          if (!editor.isDestroyed) setExternalMatches(editor.view, matches);
+        }),
+      onStatus: setAiStatus,
+    });
+    schedulerRef.current = scheduler;
+    feedScheduler(editor);
+    return () => {
+      scheduler.dispose();
+      schedulerRef.current = null;
+      if (!editor.isDestroyed) setExternalMatches(editor.view, new Map());
+    };
+  }, [editor, ai, feedScheduler]);
+
+  const aiPanel: AiPanelState = !ai
+    ? { kind: "loading" }
+    : !ai.enabled
+      ? { kind: "off" }
+      : !ai.configured
+        ? { kind: "not_configured" }
+        : { kind: "on", status: aiStatus };
 
   // Save whatever is queued when the tab is hidden or closed, and before signing out (which
   // ends the session before this component unmounts).
@@ -157,7 +225,9 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
             maxLength={200}
             onChange={(e) => {
               setTitle(e.target.value);
+              titleRef.current = e.target.value;
               queueSave({ title: e.target.value });
+              if (editor) feedScheduler(editor);
             }}
             className="mb-6 w-full bg-transparent font-serif text-3xl font-semibold outline-none placeholder:text-muted/60"
           />
@@ -174,6 +244,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
         <SuggestionPanel
           suggestions={suggestions}
           activeKey={activeKey}
+          ai={aiPanel}
           onActivate={(s) => {
             if (!editor) return;
             activateSuggestion(editor.view, s?.key ?? null);
@@ -202,7 +273,10 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
           goalsRef.current = next;
           setGoalsOpen(false);
           queueSave({ goals: next });
-          if (editor) recheckSuggestions(editor.view);
+          if (editor) {
+            recheckSuggestions(editor.view);
+            feedScheduler(editor);
+          }
         }}
       />
     </div>

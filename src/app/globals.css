@@ -128,6 +128,10 @@ body {
   text-decoration-style: dotted;
   text-decoration-thickness: 1.5px;
 }
+/* Claude's suggestions: dashed, so they read as advice to weigh rather than a rule. */
+.polaris-suggestion--ai {
+  text-decoration-style: dashed;
+}
 .polaris-suggestion--active {
   background: var(--accent-soft);
 }
