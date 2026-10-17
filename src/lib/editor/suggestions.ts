@@ -4,7 +4,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { createParagraphChecker } from "@/lib/rules/engine";
 import { expandDeletion } from "@/lib/rules/apply";
 import type { RuleContext, RuleMatch } from "@/lib/rules/types";
-import { collectTextBlocks } from "./textblocks";
+import { collectTextBlocks, withoutFootnotes, type TextBlock } from "./textblocks";
 
 export interface Suggestion extends RuleMatch {
   /** Stable across unrelated edits: rule + paragraph text + offset. */
@@ -18,7 +18,10 @@ export interface Suggestion extends RuleMatch {
   blockFrom: number;
 }
 
-/** Matches computed elsewhere (Claude), keyed by the paragraph text they were computed for. */
+/**
+ * Matches computed elsewhere (Claude), keyed by the paragraph text they were computed for: the
+ * text without its footnote markers (withoutFootnotes() in ./textblocks), as it was sent.
+ */
 export type ExternalMatches = Map<string, RuleMatch[]>;
 
 interface PluginState {
@@ -61,6 +64,27 @@ export function mergeMatches(text: string, rules: RuleMatch[], external: RuleMat
   return merged.sort((a, b) => a.start - b.start || b.end - a.end);
 }
 
+/**
+ * A block's external matches, moved from the footnote-free text they were computed on to the
+ * block's own text (where each footnote marker is a character). A match that would take in a
+ * marker is dropped: applying it would delete the footnote along with the text.
+ */
+export function externalMatchesFor(block: TextBlock, external: ExternalMatches): RuleMatch[] {
+  const prose = withoutFootnotes(block);
+  const matches = external.get(prose.text);
+  if (!matches?.length) return [];
+  if (block.footnotes.length === 0) return matches;
+  const out: RuleMatch[] = [];
+  for (const m of matches) {
+    if (m.start < 0 || m.end > prose.text.length || m.end <= m.start) continue;
+    const start = prose.toBlock(m.start, "start");
+    const end = prose.toBlock(m.end, "end");
+    if (block.footnotes.some((f) => f >= start && f < end)) continue;
+    out.push({ ...m, start, end });
+  }
+  return out;
+}
+
 function computeSuggestions(
   state: EditorState | { doc: EditorState["doc"] },
   check: (text: string) => RuleMatch[],
@@ -78,7 +102,7 @@ function computeSuggestions(
     const matches = mergeMatches(
       block.text,
       check(block.text).filter(visible),
-      (external.get(block.text) ?? []).filter(visible),
+      externalMatchesFor(block, external).filter(visible),
     );
     for (const match of matches) {
       const key = `${match.ruleId}:${blockHash}:${match.start}-${match.end}`;

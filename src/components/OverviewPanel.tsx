@@ -234,7 +234,12 @@ function WritingSection({
         <span id="overview-writing">Your writing</span>
       </SectionHeading>
       <dl className="divide-y divide-border">
-        <Row label="Words" value={fmt(m.words)} testId="metric-words" />
+        <Row
+          label="Words"
+          value={fmt(m.words)}
+          hint="Headings are counted. Footnotes are not counted."
+          testId="metric-words"
+        />
         <Row label="Sentences" value={fmt(m.sentences)} testId="metric-sentences" />
         <Row label="Paragraphs" value={fmt(m.paragraphs)} hint="Headings are not counted." />
         <Row

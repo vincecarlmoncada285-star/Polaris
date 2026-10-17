@@ -1,15 +1,30 @@
 "use client";
 
 import { EditorContent, useEditor, type Editor, type JSONContent } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paragraphGoals } from "@/lib/ai/protocol";
 import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
-import { blocksLayout, reviewBlocks } from "@/lib/documents/blocks";
+import {
+  blocksFromContent,
+  blocksLayout,
+  footnotesLayout,
+  reviewBlocks,
+} from "@/lib/documents/blocks";
 import type { DocumentDTO } from "@/lib/documents/service";
 import type { UpdateDocumentInput, WritingGoals } from "@/lib/documents/schema";
 import { createAiScheduler, type AiScheduler, type AiStatus } from "@/lib/editor/ai-scheduler";
+import { documentExtensions } from "@/lib/editor/extensions";
+import {
+  cancelFootnote,
+  collectFootnotes,
+  cursorAfterFootnote,
+  deleteFootnote,
+  insertFootnote,
+  saveFootnote,
+  selectFootnote,
+  type FootnoteTarget,
+} from "@/lib/editor/footnote";
 import {
   Suggestions,
   activateSuggestion,
@@ -27,9 +42,14 @@ import {
   metricsBlocks,
   type DocRange,
 } from "@/lib/editor/locate";
-import { collectTextBlocks } from "@/lib/editor/textblocks";
+import { collectTextBlocks, withoutFootnotes } from "@/lib/editor/textblocks";
+import { readImportNotice } from "@/lib/import/notice";
 import { countCharacters, countWords, readingMinutes } from "@/lib/text/stats";
+import { ExportMenu, type ExportFormat } from "./ExportMenu";
+import { FootnoteDialog, type FootnoteAction } from "./FootnoteDialog";
+import { FootnoteList, type FootnoteEntry } from "./FootnoteList";
 import { GoalsDialog } from "./GoalsDialog";
+import { LinkDialog, type LinkRequest, type LinkResult } from "./LinkDialog";
 import { OverviewPanel } from "./OverviewPanel";
 import { PanelTabs, useRememberedTab } from "./PanelTabs";
 import { ReviewPanel } from "./ReviewPanel";
@@ -53,7 +73,17 @@ interface AiAvailability {
   configured: boolean;
 }
 
-const paragraphTexts = (editor: Editor) => collectTextBlocks(editor.state.doc).map((b) => b.text);
+/** What Claude is sent of each paragraph: its text without footnote markers. */
+const paragraphTexts = (editor: Editor) =>
+  collectTextBlocks(editor.state.doc).map((b) => withoutFootnotes(b).text);
+
+/** The footnotes for the list under the article (no positions: they change on every edit). */
+const footnoteEntries = (editor: Editor): FootnoteEntry[] =>
+  collectFootnotes(editor.state.doc).map(({ id, content, number }) => ({ id, content, number }));
+
+const sameEntries = (a: FootnoteEntry[], b: FootnoteEntry[]) =>
+  a.length === b.length &&
+  a.every((f, i) => f.id === b[i]!.id && f.content === b[i]!.content && f.number === b[i]!.number);
 
 const PANEL_TABS = ["suggestions", "overview", "review"] as const;
 type PanelTabId = (typeof PANEL_TABS)[number];
@@ -69,6 +99,13 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   // Which blocks are headings: from the saved document until the editor has it, then from the
   // editor on every change. The same string either way, so a review loaded early is not stale.
   const [layout, setLayout] = useState(() => blocksLayout(reviewBlocks(doc)));
+  // Where the footnotes are and what they say: a review reads them too, so it is stale when
+  // they change (footnotesLayout() in src/lib/documents/blocks.ts, on both sides).
+  const [notesLayout, setNotesLayout] = useState(() => footnotesLayout(reviewBlocks(doc)));
+  const [footnotes, setFootnotes] = useState<FootnoteEntry[]>([]);
+  const [footnoteTarget, setFootnoteTarget] = useState<FootnoteTarget | null>(null);
+  const [linkRequest, setLinkRequest] = useState<LinkRequest | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [ai, setAi] = useState<AiAvailability | null>(null);
@@ -80,6 +117,9 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     "suggestions",
   );
   const activeKeyRef = useRef<string | null>(null);
+  // The editor is built once; these let its shortcuts and markers reach the current handlers.
+  const openFootnoteRef = useRef<(target: FootnoteTarget) => void>(() => {});
+  const openLinkRef = useRef<() => void>(() => {});
 
   // Rules read goals through a ref, so changing them does not rebuild the editor.
   const goalsRef = useRef(goals);
@@ -151,8 +191,11 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
-      // StarterKit 3 bundles Underline. Links stay off until there is UI to add and edit them.
-      StarterKit.configure({ heading: { levels: [1, 2, 3] }, link: false }),
+      // The document's schema (src/lib/editor/extensions.ts), shared with the importer.
+      ...documentExtensions({
+        onEditFootnote: (target) => openFootnoteRef.current(target),
+        onLinkShortcut: () => openLinkRef.current(),
+      }),
       Placeholder.configure({ placeholder: "Start writing, or paste a draft…" }),
       Suggestions.configure({
         getContext: () => ({ citationStyle: goalsRef.current.citationStyle }),
@@ -170,6 +213,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     onCreate: ({ editor }) => {
       loadedParagraphs.current ??= paragraphTexts(editor);
       setLayout(blockLayout(editor.state.doc));
+      setFootnotes(footnoteEntries(editor));
     },
     editorProps: {
       attributes: {
@@ -179,10 +223,15 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
       },
     },
     onUpdate: ({ editor }) => {
+      // Footnotes render no text, so they are not in the plain text or the word count.
       const plainText = editor.getText({ blockSeparator: BLOCK_SEPARATOR });
+      const content = editor.getJSON();
       setText(plainText);
       setLayout(blockLayout(editor.state.doc));
-      queueSave({ content: editor.getJSON(), plainText });
+      setNotesLayout(footnotesLayout(blocksFromContent(content) ?? []));
+      const entries = footnoteEntries(editor);
+      setFootnotes((prev) => (sameEntries(prev, entries) ? prev : entries));
+      queueSave({ content, plainText });
       feedScheduler(editor);
     },
   });
@@ -316,14 +365,113 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     [editor],
   );
 
+  // What the importer left out of this document, said once when it first opens.
+  useEffect(() => {
+    setImportNotice(readImportNotice(doc.id));
+  }, [doc.id]);
+
+  const openFootnote = useCallback((target: FootnoteTarget) => setFootnoteTarget(target), []);
+  openFootnoteRef.current = openFootnote;
+
+  const insertNewFootnote = useCallback(() => {
+    if (!editor) return;
+    const target = insertFootnote(editor);
+    if (target) setFootnoteTarget(target);
+    else editor.commands.focus();
+  }, [editor]);
+
+  const finishFootnote = useCallback(
+    (target: FootnoteTarget, action: FootnoteAction) => {
+      setFootnoteTarget(null);
+      if (!editor) return;
+      if (action.kind === "save") saveFootnote(editor, target, action.content);
+      else if (action.kind === "delete") deleteFootnote(editor, target);
+      else cancelFootnote(editor, target);
+      // Back to the text, right after the marker (or where it was).
+      if (!cursorAfterFootnote(editor, target.id)) editor.commands.focus();
+    },
+    [editor],
+  );
+
+  const openLink = useCallback(() => {
+    if (!editor) return;
+    const href = editor.getAttributes("link").href;
+    setLinkRequest({
+      href: typeof href === "string" ? href : "",
+      hasText: !editor.state.selection.empty || editor.isActive("link"),
+    });
+  }, [editor]);
+  openLinkRef.current = openLink;
+
+  const finishLink = useCallback(
+    (href: LinkResult) => {
+      setLinkRequest(null);
+      if (!editor) return;
+      const chain = editor.chain().focus();
+      if (href === null) {
+        chain.run();
+      } else if (href === "") {
+        chain.extendMarkRange("link").unsetLink().run();
+      } else if (editor.state.selection.empty && !editor.isActive("link")) {
+        // Nothing selected: the address itself becomes the linked text.
+        chain
+          .insertContent({
+            type: "text",
+            text: href.replace(/^mailto:/i, ""),
+            marks: [{ type: "link", attrs: { href } }],
+          })
+          .run();
+      } else {
+        chain.extendMarkRange("link").setLink({ href }).run();
+      }
+    },
+    [editor],
+  );
+
+  // Exports exactly what the editor shows: its current content and the title as typed.
+  const exportAs = useCallback(
+    async (format: ExportFormat) => {
+      if (!editor) return;
+      if (format === "print") {
+        window.print();
+        return;
+      }
+      const content = editor.getJSON();
+      const [{ downloadBlob, MIME }, { exportFileName }] = await Promise.all([
+        import("@/lib/export/download"),
+        import("@/lib/export/filename"),
+      ]);
+      let blob: Blob;
+      if (format === "docx") {
+        const { exportDocx } = await import("@/lib/export/docx");
+        blob = await exportDocx(content, title);
+      } else if (format === "md") {
+        const { toMarkdown } = await import("@/lib/export/markdown");
+        blob = new Blob([toMarkdown(content, title)], { type: MIME.md });
+      } else {
+        const { toPlainText } = await import("@/lib/export/text");
+        blob = new Blob([toPlainText(content, title)], { type: MIME.txt });
+      }
+      downloadBlob(blob, exportFileName(title, format));
+    },
+    [editor, title],
+  );
+
   const words = countWords(text);
   const targetWords = goals.targetWords;
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-8 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <div
+      className="mx-auto grid max-w-6xl gap-8 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_20rem]"
+      data-print="layout"
+    >
       <div className="min-w-0">
-        <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 bg-background/95 px-1 py-2 backdrop-blur">
-          {editor && <Toolbar editor={editor} />}
+        <div
+          className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 bg-background/95 px-1 py-2 backdrop-blur"
+          data-print="hide"
+          data-testid="editor-toolbar"
+        >
+          {editor && <Toolbar editor={editor} onLink={openLink} onFootnote={insertNewFootnote} />}
           <button
             type="button"
             onClick={() => setGoalsOpen(true)}
@@ -331,6 +479,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
           >
             Goals
           </button>
+          <ExportMenu onExport={exportAs} />
           <span
             className="ml-auto text-xs text-muted"
             role="status"
@@ -341,7 +490,30 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
           </span>
         </div>
 
-        <article className="mt-4 rounded-lg border border-border bg-surface px-6 py-8 sm:px-12 sm:py-12">
+        {importNotice && (
+          <div
+            role="status"
+            className="mt-4 flex items-start gap-3 rounded-md border border-border bg-accent-soft px-4 py-3 text-sm"
+            data-print="hide"
+            data-testid="import-notice"
+          >
+            <p className="min-w-0 flex-1">{importNotice}</p>
+            <button
+              type="button"
+              onClick={() => setImportNotice(null)}
+              className="shrink-0 text-muted underline hover:text-foreground"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        <article
+          className="mt-4 rounded-lg border border-border bg-surface px-6 py-8 sm:px-12 sm:py-12"
+          data-print="article"
+        >
+          {/* The title as printed: an input prints as a box. */}
+          <h1 className="polaris-print-title hidden">{title || "Untitled document"}</h1>
           <label htmlFor="doc-title" className="sr-only">
             Title
           </label>
@@ -357,11 +529,26 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
               if (editor) feedScheduler(editor);
             }}
             className="mb-6 w-full bg-transparent font-serif text-3xl font-semibold outline-none placeholder:text-muted/60"
+            data-print="hide"
           />
           <EditorContent editor={editor} />
+          <FootnoteList
+            footnotes={footnotes}
+            onEdit={(f) => {
+              if (!editor) return;
+              const target = collectFootnotes(editor.state.doc).find((x) => x.id === f.id);
+              if (target)
+                setFootnoteTarget({
+                  id: target.id,
+                  number: target.number,
+                  content: target.content,
+                });
+            }}
+            onShowMarker={(f) => !!editor && selectFootnote(editor, f.id)}
+          />
         </article>
 
-        <p className="mt-3 text-xs text-muted" data-testid="word-count">
+        <p className="mt-3 text-xs text-muted" data-testid="word-count" data-print="hide">
           {formatNumber(words)}
           {targetWords ? ` / ${formatNumber(targetWords)}` : ""}{" "}
           {words === 1 && !targetWords ? "word" : "words"} · {formatNumber(countCharacters(text))}{" "}
@@ -369,7 +556,11 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
         </p>
       </div>
 
-      <div className="flex flex-col lg:sticky lg:top-4 lg:h-[calc(100vh-6rem)]">
+      <div
+        className="flex flex-col lg:sticky lg:top-4 lg:h-[calc(100vh-6rem)]"
+        data-print="hide"
+        data-testid="side-panel"
+      >
         <PanelTabs
           label="Writing tools"
           idPrefix="panel"
@@ -434,6 +625,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
                   words={words}
                   text={text}
                   layout={layout}
+                  footnotes={notesLayout}
                   flushSave={flushSave}
                   onFindQuote={(quote) =>
                     !!editor && selectRange(findTextInDoc(editor.state.doc, quote))
@@ -447,6 +639,9 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
           ]}
         />
       </div>
+
+      <FootnoteDialog target={footnoteTarget} onDone={finishFootnote} />
+      <LinkDialog request={linkRequest} onDone={finishLink} />
 
       <GoalsDialog
         open={goalsOpen}

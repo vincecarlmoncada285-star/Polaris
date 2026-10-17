@@ -15,8 +15,18 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
 - `src/lib/rules/`: the rule engine. Pure functions over a paragraph's plain text; no editor imports.
   - `builtin.ts`: rules. Add a rule there, then add it to `BUILTIN_RULES` (order = overlap priority).
   - `engine.ts`: runs rules, resolves overlaps, LRU cache keyed by context + text.
-- `src/lib/editor/`: ProseMirror bridge. `textblocks.ts` maps text offsets to doc positions
-  (inline atoms count as U+FFFC); `suggestions.ts` is the TipTap extension (decorations,
+- `src/lib/editor/`: ProseMirror bridge. `extensions.ts` is the shared extensions list
+  (`documentExtensions()`: StarterKit with Link configured, Footnote, the Ctrl-click / Mod-k link
+  behaviour): the editor, the importer and the tests all build the schema from it.
+  `footnote.ts`: the `footnote` inline atom (attrs id + content; `<sup data-footnote
+data-content>`; renderText "" so plain text, word counts and getText() leave it out), a DOM
+  node view numbered through node decorations, Mod-Alt-f / Enter, and the insert / save / delete
+  helpers (a just-inserted footnote's text folds into its insertion: one undo removes it).
+  `links.ts`: the link allow-list (http, https, mailto; `isAllowedLinkHref` strict,
+  `isAllowedLinkUri` for autolink, `normalizeLinkInput` for the dialog). `textblocks.ts` maps
+  text offsets to doc positions (inline atoms count as U+FFFC; `footnotes: "omit"` leaves
+  markers out for the Overview and quote finding; `withoutFootnotes()` is what Claude is sent,
+  and AI matches are mapped back through it); `suggestions.ts` is the TipTap extension (decorations,
   dismissals, apply; `setExternalMatches()` merges in AI matches, keyed by paragraph text, rules
   win on overlap); `ai-scheduler.ts` is the framework-free client scheduler for AI requests
   (only paragraphs changed since the document opened, 1.5 s idle, 8+ words, 2 in flight, last
@@ -34,7 +44,8 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
     max_tokens handling.
   - `review.ts`: the whole-document review. Byte-stable `REVIEW_SYSTEM_PROMPT` (bump
     `REVIEW_PROMPT_VERSION` when it, the user message or the schema changes); user message
-    (goals, title, outline, `[P1]`-numbered paragraphs in `<document>`); streamed request
+    (goals, title, outline, `[P1]`-numbered paragraphs in `<document>` with `[^n]` footnote
+    markers, and a numbered "Footnotes:" list at its end); streamed request
     (`beta.messages.stream` + `finalMessage()`, 64000 max_tokens, fallbacks as for paragraphs);
     refusal -> `{ refused: true }`, max_tokens -> `AiOutputError`. `review-schema.ts`: its zod/v4
     schema and `cleanReview()` (limits, quotes anchored to the plain text or dropped).
@@ -48,13 +59,15 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
     the client, review types and word limits; plain zod).
   - Routes: `src/app/api/ai/paragraph/route.ts`; `src/app/api/documents/[id]/review/route.ts`
     (POST runs and saves a review, `maxDuration = 300`; GET returns the latest with `stale`).
-- `src/lib/documents/`: zod schemas (goals include the optional `targetWords`) + service (takes
-  a PrismaClient, so tests use a temp DB). Every method takes `userId` first. `reviews.ts`:
-  saved reviews (`DocumentReview`), newest 5 per document, `contentHash()` (sha256 of the
-  reviewed blocks' text and heading levels) for staleness. `blocks.ts`: textblocks from the
+- `src/lib/documents/`: zod schemas (goals include the optional `targetWords`; create accepts
+  an import's title, content and plainText under the update limits) + service (takes a
+  PrismaClient, so tests use a temp DB). Every method takes `userId` first; `exportPage()` pages
+  by id for the data export (`src/app/api/documents/export/route.ts`). `reviews.ts`: saved
+  reviews (`DocumentReview`), newest 5 per document, `contentHash()` (sha256 of the reviewed
+  blocks' text, heading levels and footnotes) for staleness. `blocks.ts`: textblocks from the
   stored TipTap JSON (`reviewBlocks()`: what a review sends, measures and hashes; never the
-  separately saved plainText), and the paragraph numbering both the review prompt and the
-  editor use.
+  separately saved plainText; footnotes are left out of a block's text and listed with their
+  offsets), and the paragraph numbering both the review prompt and the editor use.
 - `src/lib/text/`: `stats.ts` (word count, reading time) and `metrics.ts`, the Overview's pure
   metrics (sentences via `splitSentences`, passive via the `passiveVoice` rule, Flesch scores
   with a documented syllable heuristic, MATTR, repeated openers, longest-sentence offsets).
@@ -82,8 +95,23 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
   Suggestions when an underline is clicked) holding `SuggestionPanel.tsx`, `OverviewPanel.tsx`
   (recomputes 300 ms after the text or the heading layout changes, only while shown) and
   `ReviewPanel.tsx` (GET when shown, POST after flushing the autosaver, Cancel aborts, stale when
-  the editor text or heading layout differs from what was reviewed). The layout comes from
-  `blockLayout()` in `src/lib/editor/locate.ts`.
+  the editor text, heading layout or footnotes differ from what was reviewed). The layout comes
+  from `blockLayout()` in `src/lib/editor/locate.ts`, the footnotes from `footnotesLayout()` in
+  `blocks.ts`. Also `FootnoteDialog.tsx`, `FootnoteList.tsx` (under the article), `LinkDialog.tsx`
+  and `ExportMenu.tsx` (a WAI-ARIA menu button).
+- `src/lib/import/`: in the browser, lazily loaded. `index.ts` (`convertFile()`: extension and
+  10 MB checks, FileReader progress, dynamic import of the converter), `docx.ts` (mammoth with a
+  style map; its note references and list become footnotes; comments and tracked deletions
+  counted from the zip), `markdown.ts` (marked GFM; `[^label]` footnotes; raw HTML rendered as
+  text), `text.ts` (blank-line paragraphs), and `html.ts`, where every path ends:
+  `htmlToDocument()` parses with DOMParser, `sanitizeImportedDom()` strips and counts, then the
+  editor schema converts. `notice.ts`: what was left out, said once in the new document. The
+  library POSTs `/api/documents` with title, content and plainText (same limits as PATCH).
+- `src/lib/export/`: pure converters from TipTap JSON: `docx.ts` (docx package, lazy;
+  `buildDocx()` + `Packer`), `markdown.ts` (CommonMark, escaped; round-trips through the
+  importer), `text.ts`; `filename.ts` (slugs), `download.ts`, `archive.ts` + `protocol.ts` (the
+  Settings zip from paginated `GET /api/documents/export`). Print is `@media print` in
+  `globals.css` (elements marked `data-print="hide"`).
 
 ## Conventions
 
@@ -91,6 +119,8 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
   than misses; students lose trust in noisy tools).
 - Explanations are written to a student, in one or two sentences, and say _why_.
 - Never auto-apply changes. The writer always chooses.
+- Imported HTML is parsed with DOMParser and the editor schema, never inserted into the live DOM;
+  links only allow http, https and mailto.
 - Accessibility: every control needs an accessible name; colour is never the only signal
   (cards carry the category label).
 - Keep `ANTHROPIC_API_KEY` server-side only. Never log document text.

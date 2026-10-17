@@ -13,9 +13,15 @@ export interface DocRange {
 
 const isHeading = (doc: PMNode, block: TextBlock) => doc.nodeAt(block.pos)?.type.name === "heading";
 
-/** The document's textblocks for computeMetrics(), headings marked. */
+/**
+ * The writer's prose: footnote markers take no character (their text is not part of it), so the
+ * Overview measures, and quotes are found in, the same text as the saved plain text has.
+ */
+const proseBlocks = (doc: PMNode) => collectTextBlocks(doc, { footnotes: "omit" });
+
+/** The document's textblocks for computeMetrics(), headings marked, footnotes left out. */
 export function metricsBlocks(doc: PMNode): MetricsBlock[] {
-  return collectTextBlocks(doc).map((b) => ({ text: b.text, heading: isHeading(doc, b) }));
+  return proseBlocks(doc).map((b) => ({ text: b.text, heading: isHeading(doc, b) }));
 }
 
 /**
@@ -43,7 +49,7 @@ const SEPARATOR = "\n\n";
  * anchoring tolerates, so a quote may run across a paragraph break.
  */
 export function findTextInDoc(doc: PMNode, quote: string): DocRange | null {
-  const blocks = collectTextBlocks(doc);
+  const blocks = proseBlocks(doc);
   const starts: number[] = [];
   let text = "";
   blocks.forEach((b, i) => {
@@ -59,7 +65,7 @@ export function findTextInDoc(doc: PMNode, quote: string): DocRange | null {
     while (i > 0 && starts[i]! > offset - (edge === "end" ? 1 : 0)) i--;
     const block = blocks[i]!;
     const local = Math.min(Math.max(offset - starts[i]!, 0), block.text.length);
-    return block.posAt(local);
+    return block.posAt(local, edge);
   };
   const from = position(range[0], "start");
   const to = position(range[1], "end");
@@ -72,9 +78,9 @@ export function findTextInDoc(doc: PMNode, quote: string): DocRange | null {
  * may have moved on.
  */
 export function findSentence(doc: PMNode, sentence: SentenceLocation): DocRange | null {
-  const block = collectTextBlocks(doc)[sentence.block];
+  const block = proseBlocks(doc)[sentence.block];
   if (block && block.text.slice(sentence.start, sentence.end) === sentence.text) {
-    return { from: block.posAt(sentence.start), to: block.posAt(sentence.end) };
+    return { from: block.posAt(sentence.start), to: block.posAt(sentence.end, "end") };
   }
   return findTextInDoc(doc, sentence.text);
 }
@@ -82,11 +88,13 @@ export function findSentence(doc: PMNode, sentence: SentenceLocation): DocRange 
 /** The n-th paragraph (1-based), numbered as the review prompt numbers them, or null. */
 export function findParagraph(doc: PMNode, n: number): DocRange | null {
   let count = 0;
-  for (const block of collectTextBlocks(doc)) {
+  for (const block of proseBlocks(doc)) {
     if (!isNumberedParagraph({ text: block.text, heading: isHeading(doc, block) ? 1 : null })) {
       continue;
     }
-    if (++count === n) return { from: block.posAt(0), to: block.posAt(block.text.length) };
+    if (++count === n) {
+      return { from: block.posAt(0), to: block.posAt(block.text.length, "end") };
+    }
   }
   return null;
 }

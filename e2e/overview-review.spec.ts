@@ -306,7 +306,7 @@ test("Review: results render, quotes jump into the text, and edits make it stale
   await page.getByRole("tab", { name: "Review" }).click();
   const panel = page.getByRole("tabpanel", { name: "Review" });
   await expect(panel).toContainText(
-    "Polaris sends this whole document, its title and your writing goals to Anthropic's Claude API",
+    "Polaris sends this whole document with its footnotes, its title and your writing goals to Anthropic's Claude API",
   );
   const start = panel.getByRole("button", { name: "Review document" });
   await expect(start).toBeEnabled();

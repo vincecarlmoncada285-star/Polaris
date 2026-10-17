@@ -72,13 +72,28 @@ const ITEMS: (Item | "sep")[] = [
   },
 ];
 
-export function Toolbar({ editor }: { editor: Editor }) {
+export function Toolbar({
+  editor,
+  onLink,
+  onFootnote,
+}: {
+  editor: Editor;
+  /** Opens the link dialog for the selection (also Ctrl+K in the text). */
+  onLink: () => void;
+  /** Inserts a footnote at the cursor and opens its dialog (also Ctrl+Alt+F). */
+  onFootnote: () => void;
+}) {
   // TipTap 3 does not re-render on every transaction, so subscribe to the pressed states
   // (they change when the cursor moves into bold text, not only when the text changes).
   const active = useEditorState({
     editor,
     selector: ({ editor: e }) => ITEMS.map((item) => (item === "sep" ? false : item.isActive(e))),
   });
+  const inLink = useEditorState({ editor, selector: ({ editor: e }) => e.isActive("link") });
+  const dialogButton = (on: boolean) =>
+    `rounded px-2 py-1 text-sm font-medium ${
+      on ? "bg-accent-soft text-accent" : "text-muted hover:bg-background hover:text-foreground"
+    }`;
   return (
     <div
       role="toolbar"
@@ -106,6 +121,28 @@ export function Toolbar({ editor }: { editor: Editor }) {
           </button>
         ),
       )}
+      <span aria-hidden className="mx-1 h-5 w-px bg-border" />
+      {/* These open dialogs rather than toggling, so they are not pressed buttons. */}
+      <button
+        type="button"
+        title="Link (Ctrl+K)"
+        aria-haspopup="dialog"
+        aria-keyshortcuts="Control+K Meta+K"
+        onClick={onLink}
+        className={`${dialogButton(inLink)} underline`}
+      >
+        Link
+      </button>
+      <button
+        type="button"
+        title="Footnote (Ctrl+Alt+F)"
+        aria-haspopup="dialog"
+        aria-keyshortcuts="Control+Alt+F Meta+Alt+F"
+        onClick={onFootnote}
+        className={dialogButton(false)}
+      >
+        Footnote
+      </button>
     </div>
   );
 }

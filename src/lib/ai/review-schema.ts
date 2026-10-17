@@ -74,15 +74,17 @@ export const REVIEW_LIMITS = {
 
 const OUTER_QUOTES = /^["'“”‘’«»]+|["'“”‘’«»]+$/g;
 const LEADING_MARKER = /^\s*\[P\d+\]\s*/i;
+const FOOTNOTE_MARKER = /\[\^\d+\]/g;
 
 /**
  * The quote as it stands in `text` (exact characters), or null. Tolerates what the anchoring
- * tolerates (curly vs straight quotes, dashes, whitespace), plus wrapping quotation marks and
- * a paragraph marker copied from the prompt.
+ * tolerates (curly vs straight quotes, dashes, whitespace), plus wrapping quotation marks, a
+ * paragraph marker and footnote markers copied from the prompt (the text has no markers).
  */
 export function anchorQuote(text: string, raw: string | null): string | null {
   if (raw === null) return null;
-  const candidates = [raw.trim(), raw.trim().replace(LEADING_MARKER, "").replace(OUTER_QUOTES, "")];
+  const bare = raw.trim().replace(LEADING_MARKER, "").replace(OUTER_QUOTES, "");
+  const candidates = [raw.trim(), bare, bare.replace(FOOTNOTE_MARKER, "").trim()];
   for (const q of candidates) {
     if (!q || q.length > REVIEW_LIMITS.quoteChars) continue;
     const range = findQuote(text, q);

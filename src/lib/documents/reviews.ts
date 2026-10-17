@@ -7,13 +7,21 @@ import type { DocBlock } from "./blocks";
 export const MAX_REVIEWS_PER_DOCUMENT = 5;
 
 /**
- * sha256 of the reviewed text, block by block, with each block's heading level: how a review
- * knows whether the document changed. Any edit to the text changes it, and so does turning a
- * paragraph into a heading or back, which leaves the plain text alone but renumbers the [P]
- * paragraphs the review points to. The title and goals are not part of it.
+ * sha256 of the reviewed text, block by block, with each block's heading level and footnotes:
+ * how a review knows whether the document changed. Any edit to the text changes it, and so does
+ * turning a paragraph into a heading or back, which leaves the plain text alone but renumbers
+ * the [P] paragraphs the review points to, and adding, moving, editing or deleting a footnote
+ * (the review reads them too). The title and goals are not part of it. A block without footnotes
+ * hashes as before footnotes existed, so older reviews of such documents stay current.
  */
 export function contentHash(blocks: readonly DocBlock[]): string {
-  const canonical = JSON.stringify(blocks.map((b) => [b.heading, b.text]));
+  const canonical = JSON.stringify(
+    blocks.map((b) =>
+      b.footnotes?.length
+        ? [b.heading, b.text, b.footnotes.map((f) => [f.offset, f.content])]
+        : [b.heading, b.text],
+    ),
+  );
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 

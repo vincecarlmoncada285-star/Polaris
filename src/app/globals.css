@@ -141,3 +141,107 @@ body {
     text-decoration-color: Highlight;
   }
 }
+
+/* ---------- Links and footnotes in the editor ---------- */
+
+.polaris-prose a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.polaris-footnote {
+  font-family: var(--font-sans);
+  font-size: 0.7em;
+  line-height: 0;
+  margin-left: 1px;
+}
+.polaris-prose .polaris-footnote a {
+  text-decoration: none;
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+.polaris-footnote.ProseMirror-selectednode a {
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+}
+
+/* ---------- Print / Save as PDF ---------- */
+
+@media print {
+  @page {
+    margin: 2.5cm 2.2cm;
+  }
+  :root {
+    --background: #ffffff;
+    --surface: #ffffff;
+    --foreground: #000000;
+    --muted: #333333;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  /* The navbar, the toolbar, the side panel and other controls are not part of the document. */
+  body > header,
+  [data-print="hide"],
+  .polaris-footnote-edit,
+  .polaris-footnote-back,
+  dialog {
+    display: none !important;
+  }
+  [data-print="layout"] {
+    display: block !important;
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  [data-print="article"] {
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: none !important;
+  }
+  .polaris-print-title {
+    display: block !important;
+    font-family: var(--font-serif);
+    font-size: 20pt;
+    font-weight: 600;
+    margin: 0 0 1.2em;
+    break-after: avoid;
+  }
+  .polaris-prose {
+    font-size: 12pt;
+    line-height: 1.5;
+    min-height: 0;
+  }
+  .polaris-prose h1,
+  .polaris-prose h2,
+  .polaris-prose h3,
+  .polaris-footnotes h2 {
+    break-after: avoid;
+    break-inside: avoid;
+  }
+  .polaris-prose p,
+  .polaris-prose li,
+  .polaris-prose blockquote {
+    orphans: 3;
+    widows: 3;
+  }
+  /* Suggestions are for the screen: no underlines or highlights on paper. */
+  .polaris-suggestion {
+    text-decoration: none !important;
+    background: none !important;
+  }
+  .polaris-prose a {
+    color: inherit;
+  }
+  .polaris-prose .polaris-footnote a {
+    outline: none;
+    background: none;
+  }
+  .polaris-footnotes {
+    border-top: 1px solid #999;
+    font-size: 10pt;
+    break-before: auto;
+  }
+}

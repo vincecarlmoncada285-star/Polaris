@@ -1,6 +1,6 @@
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { countWords } from "@/lib/text/stats";
-import type { UpdateDocumentInput, WritingGoals } from "./schema";
+import type { CreateDocumentInput, UpdateDocumentInput, WritingGoals } from "./schema";
 
 export interface DocumentDTO {
   id: string;
@@ -65,10 +65,16 @@ export function createDocumentService(db: PrismaClient) {
       return row ? toDTO(row) : null;
     },
 
-    async create(userId: string, input: { title?: string } = {}): Promise<DocumentDTO> {
-      const row = await db.document.create({
-        data: input.title ? { userId, title: input.title } : { userId },
-      });
+    /** A new document: empty, or with the title, content and plain text an import made. */
+    async create(userId: string, input: CreateDocumentInput = {}): Promise<DocumentDTO> {
+      const data: Prisma.DocumentUncheckedCreateInput = { userId };
+      if (input.title) data.title = input.title;
+      if (input.content !== undefined) data.content = JSON.stringify(input.content);
+      if (input.plainText !== undefined) {
+        data.plainText = input.plainText;
+        data.wordCount = countWords(input.plainText);
+      }
+      const row = await db.document.create({ data });
       return toDTO(row);
     },
 
@@ -89,6 +95,31 @@ export function createDocumentService(db: PrismaClient) {
       if (count === 0) return null;
       const row = await db.document.findFirst({ where: { id, userId } });
       return row ? toDTO(row) : null;
+    },
+
+    /**
+     * One page of the user's documents with their content, for the data export: ordered by id,
+     * starting after `after`. Paging keeps each response small however many documents there
+     * are; the next page starts after the last id of this one.
+     */
+    async exportPage(
+      userId: string,
+      { after, take }: { after?: string; take: number },
+    ): Promise<{ documents: DocumentDTO[]; nextCursor: string | null; total: number }> {
+      const [rows, total] = await Promise.all([
+        db.document.findMany({
+          where: after ? { userId, id: { gt: after } } : { userId },
+          orderBy: { id: "asc" },
+          take: take + 1,
+        }),
+        db.document.count({ where: { userId } }),
+      ]);
+      const page = rows.slice(0, take);
+      return {
+        documents: page.map(toDTO),
+        nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+        total,
+      };
     },
 
     async remove(userId: string, id: string): Promise<boolean> {

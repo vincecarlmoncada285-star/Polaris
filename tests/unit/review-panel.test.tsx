@@ -384,10 +384,10 @@ describe("review panel: results", () => {
 describe("what a review sends", () => {
   it("is said the same way in the Review tab and in Settings", () => {
     expect(REVIEW_SENDS).toBe(
-      "Polaris sends this whole document, its title and your writing goals to Anthropic's Claude API",
+      "Polaris sends this whole document with its footnotes, its title and your writing goals to Anthropic's Claude API",
     );
     expect(AI_EXPLANATION).toContain(
-      "Asking for a review in the Review tab sends the whole document, its title and your writing goals.",
+      "Asking for a review in the Review tab sends the whole document with its footnotes, its title and your writing goals.",
     );
   });
 });

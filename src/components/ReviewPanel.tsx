@@ -15,7 +15,7 @@ import { formatNumber } from "@/lib/text/format";
 
 /** Exactly what a review sends: the Settings text says the same. */
 export const REVIEW_SENDS =
-  "Polaris sends this whole document, its title and your writing goals to Anthropic's Claude API";
+  "Polaris sends this whole document with its footnotes, its title and your writing goals to Anthropic's Claude API";
 export const REVIEW_RUNNING = "Reviewing your document. This can take a minute or two.";
 export const REVIEW_STALE = "You have edited the document since this review.";
 const NETWORK_ERROR = "Couldn’t reach Polaris. Check your connection and try again.";
@@ -134,6 +134,11 @@ interface Props {
    * numbers skip headings, so turning a paragraph into one makes the review stale too.
    */
   layout: string;
+  /**
+   * Where the footnotes are and what they say (footnotesLayout() in src/lib/documents/blocks.ts):
+   * a review reads them too, so editing one makes the review stale.
+   */
+  footnotes?: string;
   /** Saves any pending edits now; false if that failed. */
   flushSave: () => Promise<boolean>;
   /** Selects the passage in the editor; false if it is no longer there. */
@@ -147,6 +152,7 @@ type LoadState = "idle" | "loading" | "loaded" | "error";
 interface Snapshot {
   text: string;
   layout: string;
+  footnotes: string;
 }
 
 export function ReviewPanel({
@@ -157,6 +163,7 @@ export function ReviewPanel({
   words,
   text,
   layout,
+  footnotes = "[]",
   flushSave,
   onFindQuote,
   onFindParagraph,
@@ -171,8 +178,8 @@ export function ReviewPanel({
   const [error, setError] = useState<ReviewError | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
-  const snapshotRef = useRef<Snapshot>({ text, layout });
-  snapshotRef.current = { text, layout };
+  const snapshotRef = useRef<Snapshot>({ text, layout, footnotes });
+  snapshotRef.current = { text, layout, footnotes };
   const flushRef = useRef(flushSave);
   flushRef.current = flushSave;
   const runRef = useRef<AbortController | null>(null);
@@ -302,7 +309,11 @@ export function ReviewPanel({
   const blocked = blockedReason(ai, aiLookupFailed, words);
   const stale =
     !!review &&
-    (review.stale || (reviewed !== null && (text !== reviewed.text || layout !== reviewed.layout)));
+    (review.stale ||
+      (reviewed !== null &&
+        (text !== reviewed.text ||
+          layout !== reviewed.layout ||
+          footnotes !== reviewed.footnotes)));
 
   return (
     <div className="flex-1 space-y-4 overflow-y-auto pb-6 text-sm" data-testid="review">
