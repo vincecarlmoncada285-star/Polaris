@@ -147,6 +147,11 @@ describe("Overview metrics", () => {
     ).toBe(button);
   });
 
+  it("says under the word count that footnotes are not counted", () => {
+    render(panel({ text: "One sentence here." }).element);
+    expect(screen.getByTestId("metric-words").textContent).toContain("Footnotes are not counted.");
+  });
+
   it("lays each metric out as a term and its values, directly inside the list's groups", () => {
     render(panel({ text: "One sentence here. And another one." }).element);
     const list = screen.getByTestId("metric-words").closest("dl")!;

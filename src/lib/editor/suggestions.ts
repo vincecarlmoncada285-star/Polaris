@@ -4,7 +4,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { createParagraphChecker } from "@/lib/rules/engine";
 import { expandDeletion } from "@/lib/rules/apply";
 import type { RuleContext, RuleMatch } from "@/lib/rules/types";
-import { collectTextBlocks } from "./textblocks";
+import { collectTextBlocks, withoutFootnotes, type TextBlock } from "./textblocks";
 
 export interface Suggestion extends RuleMatch {
   /** Stable across unrelated edits: rule + paragraph text + offset. */
@@ -18,7 +18,10 @@ export interface Suggestion extends RuleMatch {
   blockFrom: number;
 }
 
-/** Matches computed elsewhere (Claude), keyed by the paragraph text they were computed for. */
+/**
+ * Matches computed elsewhere (Claude), keyed by the paragraph text they were computed for: the
+ * text without its footnote markers (withoutFootnotes() in ./textblocks), as it was sent.
+ */
 export type ExternalMatches = Map<string, RuleMatch[]>;
 
 interface PluginState {
@@ -61,6 +64,51 @@ export function mergeMatches(text: string, rules: RuleMatch[], external: RuleMat
   return merged.sort((a, b) => a.start - b.start || b.end - a.end);
 }
 
+/**
+ * Moves matches computed on a block's footnote-free text (withoutFootnotes()) to the block's
+ * own text, where each footnote marker is a character. A match that would take in a marker is
+ * dropped if it can be applied (applying it would delete the footnote along with the text);
+ * with `keepSpans`, one that only marks a stretch of text (a long sentence) is kept.
+ */
+function toBlockMatches(
+  block: TextBlock,
+  prose: ReturnType<typeof withoutFootnotes>,
+  matches: RuleMatch[],
+  { keepSpans = false } = {},
+): RuleMatch[] {
+  if (block.footnotes.length === 0) return matches;
+  const out: RuleMatch[] = [];
+  for (const m of matches) {
+    if (m.start < 0 || m.end > prose.text.length || m.end <= m.start) continue;
+    const start = prose.toBlock(m.start, "start");
+    const end = prose.toBlock(m.end, "end");
+    const spansMarker = block.footnotes.some((f) => f >= start && f < end);
+    if (spansMarker && !(keepSpans && m.replacements.length === 0)) continue;
+    out.push({ ...m, start, end });
+  }
+  return out;
+}
+
+/** A block's external matches (Claude's), computed on the text it was sent: without markers. */
+export function externalMatchesFor(block: TextBlock, external: ExternalMatches): RuleMatch[] {
+  const prose = withoutFootnotes(block);
+  const matches = external.get(prose.text);
+  if (!matches?.length) return [];
+  return toBlockMatches(block, prose, matches);
+}
+
+/**
+ * A block's rule matches. The rules read the writer's prose, without footnote markers (as
+ * Claude does), so "argued.¹ The next" still ends a sentence after the full stop.
+ */
+export function ruleMatchesFor(
+  block: TextBlock,
+  check: (text: string) => RuleMatch[],
+): RuleMatch[] {
+  const prose = withoutFootnotes(block);
+  return toBlockMatches(block, prose, check(prose.text), { keepSpans: true });
+}
+
 function computeSuggestions(
   state: EditorState | { doc: EditorState["doc"] },
   check: (text: string) => RuleMatch[],
@@ -77,8 +125,8 @@ function computeSuggestions(
     // Keyed by text, so a result only ever shows on the exact text it was computed for.
     const matches = mergeMatches(
       block.text,
-      check(block.text).filter(visible),
-      (external.get(block.text) ?? []).filter(visible),
+      ruleMatchesFor(block, check).filter(visible),
+      externalMatchesFor(block, external).filter(visible),
     );
     for (const match of matches) {
       const key = `${match.ruleId}:${blockHash}:${match.start}-${match.end}`;

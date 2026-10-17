@@ -33,16 +33,16 @@ export const PARAGRAPH_DATA_TAGS = [
 /** The tags of the review prompt (src/lib/ai/review.ts). */
 export const REVIEW_DATA_TAGS = ["document", "document_title", "outline", "writing_goals"] as const;
 
-/** Paragraph markers in the review prompt: "[P12]". */
-const MARKER_LIKE = /\[(?=[\s\p{Cf}]*P[\s\p{Cf}]*\d+[\s\p{Cf}]*\])/giu;
+/** Paragraph and footnote markers in the review prompt: "[P12]", "[^3]". */
+const MARKER_LIKE = /\[(?=[\s\p{Cf}]*(?:P|\^)[\s\p{Cf}]*\d+[\s\p{Cf}]*\])/giu;
 
 /** The character that replaces the "[" of a marker-like "[P3]": full-width, like NEUTRAL_LT. */
 export const NEUTRAL_LBRACKET = "［";
 
 /**
- * Student text that itself contains "[P3]" would read as one of the review prompt's paragraph
- * markers; its "[" becomes "［" (again one character for one, and the anchoring treats "［" as
- * "[", so a quote copied from the prompt is still found in the text).
+ * Student text that itself contains "[P3]" or "[^3]" would read as one of the review prompt's
+ * paragraph or footnote markers; its "[" becomes "［" (again one character for one, and the
+ * anchoring treats "［" as "[", so a quote copied from the prompt is still found in the text).
  */
 export function neutralizeMarkers(text: string): string {
   return text.replace(MARKER_LIKE, NEUTRAL_LBRACKET);

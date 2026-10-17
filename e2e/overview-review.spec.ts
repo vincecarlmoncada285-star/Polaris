@@ -306,7 +306,7 @@ test("Review: results render, quotes jump into the text, and edits make it stale
   await page.getByRole("tab", { name: "Review" }).click();
   const panel = page.getByRole("tabpanel", { name: "Review" });
   await expect(panel).toContainText(
-    "Polaris sends this whole document, its title and your writing goals to Anthropic's Claude API",
+    "Polaris sends this whole document with its footnotes, its title and your writing goals to Anthropic's Claude API",
   );
   const start = panel.getByRole("button", { name: "Review document" });
   await expect(start).toBeEnabled();
@@ -380,6 +380,40 @@ test("Review: results render, quotes jump into the text, and edits make it stale
     .getByRole("button", { name: `Show in text: “${QUOTE}”` })
     .click();
   await expect(page.getByText("(this passage has changed)")).toBeVisible();
+});
+
+test("Review: editing only a footnote makes the review stale", async ({ page }) => {
+  await signUp(page);
+  await enableAi(page);
+  await pretendAiConfigured(page);
+  const id = await newDocument(page);
+  await fakeReviewRoutes(page, id);
+  await write(page, PARAGRAPHS);
+  // A footnote at the end of the text, before the review.
+  await page.getByRole("button", { name: "Footnote", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Footnote 1" });
+  await dialog.getByLabel("Footnote text").fill("Survey of 9 students, 2026.");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("save-status")).toHaveText("All changes saved");
+
+  await page.getByRole("tab", { name: "Review" }).click();
+  const panel = page.getByRole("tabpanel", { name: "Review" });
+  await panel.getByRole("button", { name: "Review document" }).click();
+  await expect(panel.getByTestId("review-results")).toBeVisible();
+  await expect(panel.getByTestId("review-stale")).toHaveCount(0);
+
+  // The text and headings stay the same; only the footnote's text changes.
+  await page.getByRole("button", { name: "Edit footnote 1" }).click();
+  await dialog.getByLabel("Footnote text").fill("Survey of 12 students, 2026.");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(panel.getByTestId("review-stale")).toContainText(
+    "You have edited the document since this review.",
+  );
+  // Back as it was reviewed: current again.
+  await page.getByRole("button", { name: "Edit footnote 1" }).click();
+  await dialog.getByLabel("Footnote text").fill("Survey of 9 students, 2026.");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(panel.getByTestId("review-stale")).toHaveCount(0);
 });
 
 test("Review: the button says why it is disabled for a short document and with AI off", async ({

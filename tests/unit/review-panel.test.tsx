@@ -370,6 +370,19 @@ describe("review panel: results", () => {
     expect(screen.queryByTestId("review-stale")).toBeNull();
   });
 
+  it("is stale once a footnote changes, though the text and headings do not", async () => {
+    // footnotesLayout(): [block, offset, text] for each footnote.
+    const { rerenderWith } = renderPanel({ footnotes: '[[0,5,"Smith 2020."]]' });
+    await screen.findByTestId("review-results");
+    expect(screen.queryByTestId("review-stale")).toBeNull();
+    rerenderWith({ footnotes: '[[0,5,"Smith 2021."]]' });
+    expect(screen.getByTestId("review-stale").textContent).toContain(REVIEW_STALE);
+    rerenderWith({ footnotes: '[[0,5,"Smith 2020."]]' });
+    expect(screen.queryByTestId("review-stale")).toBeNull();
+    rerenderWith({ footnotes: "[]" });
+    expect(screen.getByTestId("review-stale").textContent).toContain(REVIEW_STALE);
+  });
+
   it("refreshes the review each time the tab is shown again", async () => {
     const { rerenderWith } = renderPanel();
     await screen.findByTestId("review-results");
@@ -384,10 +397,10 @@ describe("review panel: results", () => {
 describe("what a review sends", () => {
   it("is said the same way in the Review tab and in Settings", () => {
     expect(REVIEW_SENDS).toBe(
-      "Polaris sends this whole document, its title and your writing goals to Anthropic's Claude API",
+      "Polaris sends this whole document with its footnotes, its title and your writing goals to Anthropic's Claude API",
     );
     expect(AI_EXPLANATION).toContain(
-      "Asking for a review in the Review tab sends the whole document, its title and your writing goals.",
+      "Asking for a review in the Review tab sends the whole document with its footnotes, its title and your writing goals.",
     );
   });
 });

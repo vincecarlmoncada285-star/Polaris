@@ -80,13 +80,16 @@ describe("the review prompt's neutralizer", () => {
 });
 
 describe("neutralizeMarkers", () => {
-  it.each(["[P1]", "[p12]", "[ P 3 ]", "[\u200BP4]"])("neutralizes %j", (marker) => {
-    const out = neutralizeMarkers(marker);
-    expect(out.startsWith("［")).toBe(true);
-    expect(out).toHaveLength(marker.length);
-  });
+  it.each(["[P1]", "[p12]", "[ P 3 ]", "[\u200BP4]", "[^1]", "[ ^ 12 ]"])(
+    "neutralizes %j",
+    (marker) => {
+      const out = neutralizeMarkers(marker);
+      expect(out.startsWith("［")).toBe(true);
+      expect(out).toHaveLength(marker.length);
+    },
+  );
 
-  it.each(["[1]", "[Paris]", "[P]", "[PA1]", "(P1)", "[Smith, 2020]"])(
+  it.each(["[1]", "[Paris]", "[P]", "[PA1]", "(P1)", "[Smith, 2020]", "[^]", "[^a]", "^1]"])(
     "leaves %j alone",
     (text) => {
       expect(neutralizeMarkers(text)).toBe(text);

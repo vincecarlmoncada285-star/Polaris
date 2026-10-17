@@ -17,7 +17,7 @@ import {
 } from "@/lib/ai/route-errors";
 import { requireUser } from "@/lib/auth/session";
 import { documents, reviews } from "@/lib/documents";
-import { blocksText, reviewBlocks } from "@/lib/documents/blocks";
+import { blocksFootnotes, blocksText, reviewBlocks } from "@/lib/documents/blocks";
 import { contentHash, type StoredReview } from "@/lib/documents/reviews";
 import { users } from "@/lib/users";
 import { countWords } from "@/lib/text/stats";
@@ -100,10 +100,12 @@ export async function POST(req: Request, { params }: Ctx) {
       "too_long",
     );
   }
-  if (reviewedText.length > REVIEW_MAX_CHARS) {
+  // Footnotes are sent too, so they count towards the characters (not the words).
+  const chars = blocksFootnotes(blocks).reduce((n, f) => n + f.length, reviewedText.length);
+  if (chars > REVIEW_MAX_CHARS) {
     return fail(
       413,
-      `A review can cover up to ${REVIEW_MAX_CHARS.toLocaleString("en-US")} characters; this document has ${reviewedText.length.toLocaleString("en-US")}.`,
+      `A review can cover up to ${REVIEW_MAX_CHARS.toLocaleString("en-US")} characters; this document has ${chars.toLocaleString("en-US")}.`,
       "too_long",
     );
   }

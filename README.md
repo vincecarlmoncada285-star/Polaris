@@ -4,7 +4,8 @@ An open-source writing companion for academic writing. Polaris underlines issues
 wordy phrases, passive voice, citation formatting, and more) and explains each one, so
 students learn the conventions instead of just accepting fixes. An **Overview** describes the
 draft with transparent writing metrics, and an optional **Review** by Claude gives formative
-feedback on the whole document.
+feedback on the whole document. Drafts come in from Word, Markdown or plain text, can carry
+footnotes and links, and go out again as Word, Markdown, plain text or PDF.
 
 ![Polaris editor with suggestions](docs/screenshot.png)
 
@@ -64,8 +65,8 @@ Polaris uses two layers:
    - **Off unless the writer turns it on.** Nothing is sent to Anthropic unless the writer
      switches on **AI suggestions** in Settings (checked against the database on every
      request) and the server has an Anthropic key. The same switch covers
-     [reviews](#review): asking for a review sends the whole document, its title and the
-     writing goals.
+     [reviews](#review): asking for a review sends the whole document (footnotes included), its
+     title and the writing goals.
    - **What is sent, and when.** Only paragraphs the writer writes or changes: opening a
      document sends nothing. A paragraph of at least 8 words (and at most 4,000 characters) is
      sent to the Claude API once the writer has left it unchanged for 1.5 seconds, with the
@@ -119,7 +120,7 @@ them says whether the writing is good.
 
 | Measure          | What it is                                                                                                                                | Limits                                                                                                                                               |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Words            | Every word, headings included (the footer's count).                                                                                       | A word is a run of letters or digits; "well-known" and "it's" are one word each.                                                                     |
+| Words            | Every word, headings included (the footer's count). Footnotes are not counted.                                                            | A word is a run of letters or digits; "well-known" and "it's" are one word each.                                                                     |
 | Sentences        | Sentences in paragraphs, split at `.`, `!` and `?` (not after "e.g.", "et al.", "Fig. 2", initials and the like).                         | Headings are not sentences. A list item without a full stop counts as one sentence.                                                                  |
 | Paragraphs       | Non-empty blocks that are not headings (list items count).                                                                                |                                                                                                                                                      |
 | Reading time     | Words ÷ 200 a minute.                                                                                                                     | A typical pace for academic prose; dense material reads slower.                                                                                      |
@@ -164,18 +165,19 @@ it is dropped (the point it belongs to is kept). Nothing is ever applied to your
 - **What is sent, and when.** Only when you select **Review document** (or **Review again**),
   only with **AI suggestions** switched on in Settings (checked against the database), and only
   if the server has an Anthropic key. Polaris first saves your latest edits, then sends to the
-  Claude API: the whole document as saved (every paragraph, numbered `[P1]`, `[P2]`…, and its
-  headings, also listed as an outline), its title, your writing goals (document type, audience,
+  Claude API: the whole document as saved (every paragraph, numbered `[P1]`, `[P2]`…, its
+  headings, also listed as an outline, and its footnotes, marked `[^1]` in the text and listed
+  at the end), its title, your writing goals (document type, audience,
   formality, citation style, target length) and its word and paragraph counts. The text is
   marked as the student's writing, to be reviewed and never followed as instructions. Opening
   the tab sends nothing to Claude: it only loads the last saved review from Polaris itself.
 - **Length.** From 150 to 60,000 words (and at most 600,000 characters), counted on exactly
-  the text that would be sent.
+  the text that would be sent (footnotes count towards the characters, not the words).
 - **Saved with the document.** Polaris keeps the 5 newest reviews of each document (deleted with
   the document or the account), with the model that answered, the prompt version, the word
-  count and a SHA-256 hash of the reviewed text, block by block with which blocks are headings.
-  When it no longer matches (you edited the text, or turned a paragraph into a heading or back,
-  which renumbers the paragraphs), the tab says "You have edited the document since this
+  count and a SHA-256 hash of the reviewed text, block by block with which blocks are headings
+  and the footnotes. When it no longer matches (you edited the text or a footnote, or turned a
+  paragraph into a heading or back, which renumbers the paragraphs), the tab says "You have edited the document since this
   review." and offers **Review again**. **Review again** is also there under a review that is
   still current, for when you have changed your writing goals or the title.
 - **Model.** The same model as paragraph suggestions (`POLARIS_AI_MODEL`, `claude-opus-5-5` by
@@ -192,6 +194,83 @@ it is dropped (the point it belongs to is kept). Nothing is ever applied to your
   reached, the tab says when you can ask again.
 - **Privacy.** Polaris never logs document text, prompts or Claude's output; a failed call
   logs only a fixed label, the HTTP status and Anthropic's request id.
+
+## Footnotes and links
+
+- **Footnotes.** **Footnote** in the toolbar (or Ctrl+Alt+F, Cmd+Alt+F on a Mac) puts a
+  footnote at the cursor and opens a dialog for its text (plain text, up to 2,000 characters):
+  **Save**, **Delete** or **Cancel** (Cancel on a new, empty footnote takes it out again), and
+  focus goes back to the text after the marker. Markers show as superscript numbers in document
+  order and renumber as you add, move or delete footnotes. Click a marker, or select it with the
+  arrow keys and press Enter, to edit it. Under the document a **Footnotes** list shows them in
+  order; each entry links back to its marker and has an **Edit** button, and each marker is
+  described by its footnote's text for screen readers. Undo and redo work as for any edit: one
+  undo takes out a footnote you just added.
+- **What footnotes count for.** Footnote text is not part of your prose: the word count, the
+  Overview's measures, the saved plain text, the rule-based suggestions and AI paragraph
+  suggestions all leave it out (Claude is sent each paragraph without its markers). A
+  [review](#review) does read them: they are sent as a numbered list at the end of the
+  document, and editing a footnote makes a review stale.
+- **Links.** Select text and choose **Link** (or Ctrl+K / Cmd+K) to add, change or remove a link;
+  an empty address removes it, and with nothing selected the address itself is added as linked
+  text. Web addresses typed or pasted into the text become links on their own. Only `http`,
+  `https` and `mailto` links are allowed, whether typed, pasted or imported (`javascript:`,
+  `data:`, protocol-relative `//…` and the like are refused); "example.com" gets `https://`. A
+  plain click puts the cursor in a link so you can edit its text; Ctrl-click (Cmd-click) opens it
+  in a new tab. Links open with `rel="noopener noreferrer nofollow"`.
+
+## Import
+
+**Import** in the library (or dropping a file on it) makes a new document from a file of up to
+10 MB. The file is converted **in your browser** and never uploaded; only the document it becomes
+is saved, through the same API as any other document. A file that cannot be read shows an error
+and creates nothing.
+
+| Format                    | Kept                                                                                                                                                                               | Left out (and counted)                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Word (.docx)              | Title, headings 1–3 (4–6 become 3), paragraphs, bold, italic, underline, strikethrough, bulleted and numbered lists (nested), quotes, links, footnotes and endnotes (as footnotes) | Images, tables, comments, deleted text from tracked changes (insertions are kept as text) |
+| Markdown (.md, .markdown) | GitHub-flavoured Markdown: headings, emphasis, strikethrough, code, lists (nested), quotes, links, `[^1]` footnotes with their `[^1]: …` definitions                               | Images and tables. Raw HTML is not trusted: it is kept as visible text, never as markup.  |
+| Plain text (.txt)         | Paragraphs (separated by blank lines; single line breaks inside one are soft wrapping); a file with no blank lines gets one paragraph per line                                     |                                                                                           |
+
+The title comes from Word's Title style or the first level-1 heading (taken out of the body),
+else from the file name. A title is plain text, so a footnote on it moves to a paragraph of its
+own at the start of the text. When something was left out (or a title's footnote moved), the
+new document says so once, for example "2 images and 1 table were left out." Every format is turned into HTML that is parsed
+with `DOMParser` into a detached document (never inserted into the page), stripped of scripts,
+styles, frames, forms and every `on*` and `style` attribute, and then read with the editor's own
+schema, so anything the editor cannot show is dropped. Old Word files (.doc) are not supported:
+save them as .docx first.
+
+## Export
+
+**Export** in the editor's toolbar exports exactly what the editor shows, named after the title
+(`climate-essay.docx`; "untitled" without one):
+
+- **Word (.docx):** the title in Word's Title style, Heading 1–3, bold, italic and underlined text,
+  nested bulleted and numbered lists, quotes in an indented Quote style, line breaks, real
+  hyperlinks and real Word footnotes, in 12 pt Times New Roman with 1.5 line spacing.
+- **Markdown (.md):** CommonMark with everything you typed escaped, nested lists, quotes, links,
+  hard breaks, and footnotes as `[^1]` with their definitions at the end. Importing the file
+  again gives back the same text (underline aside: Markdown has none). Where Markdown could not
+  read formatting back (bold that ends in punctuation right before a letter, as in `Note:` +
+  `text`, or in Chinese and Japanese text), that formatting is left off and the text kept.
+- **Plain text (.txt):** paragraphs separated by blank lines, list markers kept, footnotes as
+  `[1]` in the text and a numbered list at the end.
+- **Print / Save as PDF:** the browser's print dialog, with a print stylesheet that shows only
+  the title and the document (no navbar, toolbar, side panel or suggestion underlines) in the
+  serif font, with page margins, no page break straight after a heading, and the footnotes as a
+  numbered list at the end. Choose "Save as PDF" as the printer for a PDF.
+
+## Data export
+
+**Settings → Your data → Download all my documents** downloads a .zip with one Markdown file
+per document (named after its title, made unique: `essay.md`, `essay-2.md`) and a
+`manifest.json` listing each document's file, title, creation and last-edit dates, word count
+and writing goals. Saved reviews and suggestions are not included. The zip is put together in
+the browser from `GET /api/documents/export`, which returns the signed-in user's documents with
+their content 20 at a time (fewer when they are long: a page stops at about 8 million
+characters), so even hundreds of long documents never make one slow or huge request. A user can
+ask for 300 pages an hour.
 
 ## Accounts
 
@@ -257,4 +336,6 @@ it); `src/auth.ts` adds what needs Node (Prisma, bcrypt) and merges in the provi
       (no single overall score, by design)
 - [x] Phase 5: whole-document review by Claude (structured, saved per document, quotes that
       jump back into the text)
-- [ ] Phase 7: import/export (.docx, Markdown), polish
+- [x] Phase 7, part 1: footnotes, links, import (.docx, Markdown, plain text), export (.docx,
+      Markdown, plain text, print / PDF) and a data export of every document
+- [ ] Phase 7, part 2: polish
