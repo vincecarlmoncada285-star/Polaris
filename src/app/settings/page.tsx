@@ -4,11 +4,12 @@ import { requirePageUser } from "@/lib/auth/session";
 import { AiToggle } from "@/components/settings/AiToggle";
 import { DataExport } from "@/components/settings/DataExport";
 import { DeleteAccount } from "@/components/settings/DeleteAccount";
+import { OtherDevices } from "@/components/settings/OtherDevices";
 import { PasswordForm } from "@/components/settings/PasswordForm";
 import { ProfileForm } from "@/components/settings/ProfileForm";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Settings · Polaris" };
+export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
   const user = await requirePageUser("/settings");
@@ -19,6 +20,7 @@ export default async function SettingsPage() {
       <AiToggle enabled={user.aiEnabled} configured={isAiConfigured()} />
       <DataExport />
       <PasswordForm />
+      <OtherDevices />
       <DeleteAccount email={user.email} />
     </div>
   );

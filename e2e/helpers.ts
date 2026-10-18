@@ -20,6 +20,16 @@ export async function switchToFreshIp(page: Page): Promise<string> {
   return ip;
 }
 
+/**
+ * Opens the library and waits until its controls respond. The page streams in behind its
+ * loading skeleton, so right after the load event its file input can still be the server's
+ * copy, not yet revealed or hydrated, and a file set on it would be lost.
+ */
+export async function openLibrary(page: Page): Promise<void> {
+  await page.goto("/");
+  await expect(page.locator("section[data-ready]")).toBeVisible();
+}
+
 /** Signs up a brand-new user through the form and waits for the library to load. */
 export async function signUp(page: Page, overrides: Partial<TestUser> = {}): Promise<TestUser> {
   const id = randomUUID().slice(0, 8);
@@ -38,6 +48,7 @@ export async function signUp(page: Page, overrides: Partial<TestUser> = {}): Pro
   await page.getByRole("button", { name: "Create account" }).click();
   await page.waitForURL("/");
   await expect(page.getByRole("heading", { name: "Your documents" })).toBeVisible();
+  await expect(page.locator("section[data-ready]")).toBeVisible();
   return user;
 }
 
@@ -48,7 +59,8 @@ export async function signIn(page: Page, email: string, password: string): Promi
 }
 
 export async function signOut(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Sign out" }).click();
+  // Exact: Settings also has "Sign out of all other devices".
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await page.waitForURL("/signin");
 }
 

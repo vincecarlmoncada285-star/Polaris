@@ -61,6 +61,9 @@ export function PasswordForm() {
   return (
     <SectionCard id="password" title="Change password">
       <form onSubmit={onSubmit} aria-busy={pending} className="space-y-4">
+        <p className="text-sm text-muted">
+          A new password signs you out on every other device; this one stays signed in.
+        </p>
         {error && (
           <p key={alertKey} role="alert" className="text-sm text-red-600 dark:text-red-400">
             {error.message}
@@ -100,7 +103,7 @@ export function PasswordForm() {
             {pending ? "Changing…" : "Change password"}
           </button>
           <span role="status" className="text-sm text-muted">
-            {done ? "Password changed" : ""}
+            {done ? "Password changed. Your other devices have been signed out." : ""}
           </span>
         </div>
       </form>

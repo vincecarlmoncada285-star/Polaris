@@ -9,6 +9,7 @@ import {
   DUMMY_PASSWORD_HASH,
   EmailTakenError,
   IncorrectPasswordError,
+  SessionRevokedError,
 } from "@/lib/users/service";
 import { createTestDb } from "./test-db";
 
@@ -123,8 +124,10 @@ describe("verifyCredentials", () => {
   it("returns the user for the right password, in any email case", async () => {
     const email = uniqueEmail();
     const created = await service.createUser({ email, password: PASSWORD });
-    expect(await service.verifyCredentials(email, PASSWORD)).toEqual(created);
-    expect(await service.verifyCredentials(` ${email.toUpperCase()}`, PASSWORD)).toEqual(created);
+    // With the session version a new session is issued with (0 for a new account).
+    const expected = { ...created, sessionVersion: 0 };
+    expect(await service.verifyCredentials(email, PASSWORD)).toEqual(expected);
+    expect(await service.verifyCredentials(` ${email.toUpperCase()}`, PASSWORD)).toEqual(expected);
   });
 
   it("returns null for a wrong password", async () => {
@@ -194,7 +197,7 @@ describe("changePassword", () => {
     const email = uniqueEmail();
     const user = await service.createUser({ email, password: PASSWORD });
     await expect(
-      service.changePassword(user.id, "not my password", "a brand new password"),
+      service.changePassword(user.id, "not my password", "a brand new password", 0),
     ).rejects.toBeInstanceOf(IncorrectPasswordError);
     expect(await service.verifyCredentials(email, PASSWORD)).not.toBeNull();
     expect(await service.verifyCredentials(email, "a brand new password")).toBeNull();
@@ -203,24 +206,91 @@ describe("changePassword", () => {
   it("changes the password when the current one is right", async () => {
     const email = uniqueEmail();
     const user = await service.createUser({ email, password: PASSWORD });
-    await service.changePassword(user.id, PASSWORD, "a brand new password");
+    await service.changePassword(user.id, PASSWORD, "a brand new password", 0);
     expect(await service.verifyCredentials(email, "a brand new password")).not.toBeNull();
     expect(await service.verifyCredentials(email, PASSWORD)).toBeNull();
+  });
+
+  it("raises the session version with the new password, and returns it", async () => {
+    const email = uniqueEmail();
+    const user = await service.createUser({ email, password: PASSWORD });
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(0);
+    expect(await service.changePassword(user.id, PASSWORD, "a brand new password", 0)).toBe(1);
+    expect(await service.getSessionUser(user.id)).toEqual({ user, sessionVersion: 1 });
+    expect(
+      await service.changePassword(user.id, "a brand new password", "and another one", 1),
+    ).toBe(2);
+    expect((await service.verifyCredentials(email, "and another one"))?.sessionVersion).toBe(2);
+  });
+
+  it("leaves the session version alone when the change is refused", async () => {
+    const user = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    await expect(
+      service.changePassword(user.id, "not my password", "a brand new password", 0),
+    ).rejects.toBeInstanceOf(IncorrectPasswordError);
+    await expect(service.changePassword(user.id, PASSWORD, "short", 0)).rejects.toBeInstanceOf(
+      ZodError,
+    );
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(0);
   });
 
   it("rejects a too-short new password without changing anything", async () => {
     const email = uniqueEmail();
     const user = await service.createUser({ email, password: PASSWORD });
-    await expect(service.changePassword(user.id, PASSWORD, "short")).rejects.toBeInstanceOf(
+    await expect(service.changePassword(user.id, PASSWORD, "short", 0)).rejects.toBeInstanceOf(
       ZodError,
     );
     expect(await service.verifyCredentials(email, PASSWORD)).not.toBeNull();
   });
 
+  it("refuses a session that was revoked since it was checked, changing nothing", async () => {
+    const email = uniqueEmail();
+    const user = await service.createUser({ email, password: PASSWORD });
+    // Another device signed everyone out after this session (version 0) was checked.
+    expect(await service.revokeSessions(user.id, 0)).toBe(1);
+    await expect(
+      service.changePassword(user.id, PASSWORD, "a brand new password", 0),
+    ).rejects.toBeInstanceOf(SessionRevokedError);
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(1);
+    expect(await service.verifyCredentials(email, PASSWORD)).not.toBeNull();
+    expect(await service.verifyCredentials(email, "a brand new password")).toBeNull();
+    // A wrong password is still that, whatever the version.
+    await expect(
+      service.changePassword(user.id, "not my password", "a brand new password", 0),
+    ).rejects.toBeInstanceOf(IncorrectPasswordError);
+  });
+
   it("treats an unknown user like a wrong password", async () => {
     await expect(
-      service.changePassword("missing", PASSWORD, "a brand new password"),
+      service.changePassword("missing", PASSWORD, "a brand new password", 0),
     ).rejects.toBeInstanceOf(IncorrectPasswordError);
+  });
+});
+
+describe("revokeSessions", () => {
+  it("raises the session version each time and returns it; nobody else's changes", async () => {
+    const user = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    const other = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    expect(await service.revokeSessions(user.id, 0)).toBe(1);
+    expect(await service.revokeSessions(user.id, 1)).toBe(2);
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(2);
+    expect((await service.getSessionUser(other.id))?.sessionVersion).toBe(0);
+    // The password is untouched.
+    expect(await service.verifyCredentials(user.email, PASSWORD)).not.toBeNull();
+  });
+
+  it("raises it only from the version the caller's session was checked against", async () => {
+    const user = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    expect(await service.revokeSessions(user.id, 0)).toBe(1);
+    // A session still at version 0 (revoked just now) cannot raise it past the revocation.
+    expect(await service.revokeSessions(user.id, 0)).toBeNull();
+    expect(await service.revokeSessions(user.id, 5)).toBeNull();
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(1);
+  });
+
+  it("returns null for an unknown user", async () => {
+    expect(await service.revokeSessions("missing", 0)).toBeNull();
+    expect(await service.getSessionUser("missing")).toBeNull();
   });
 });
 

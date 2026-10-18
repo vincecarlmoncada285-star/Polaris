@@ -42,9 +42,14 @@ import {
   metricsBlocks,
   type DocRange,
 } from "@/lib/editor/locate";
+import { adjacentSuggestion, readingOrder } from "@/lib/editor/suggestion-nav";
 import { collectTextBlocks, withoutFootnotes } from "@/lib/editor/textblocks";
+import { SESSION_EXPIRED_PATH } from "@/lib/auth/routes";
+import { documentTitle, pageTitle } from "@/lib/page-title";
+import { detectPlatform, isTextField, matchEditorShortcut } from "@/lib/shortcuts";
 import { countCharacters, countWords, readingMinutes } from "@/lib/text/stats";
 import { ExportMenu, type ExportFormat } from "./ExportMenu";
+import { FirstRunHelp } from "./FirstRunHelp";
 import { FootnoteDialog, type FootnoteAction } from "./FootnoteDialog";
 import { FootnoteList, type FootnoteEntry } from "./FootnoteList";
 import { GoalsDialog } from "./GoalsDialog";
@@ -53,8 +58,10 @@ import { LinkDialog, type LinkRequest, type LinkResult } from "./LinkDialog";
 import { OverviewPanel } from "./OverviewPanel";
 import { PanelTabs, useRememberedTab } from "./PanelTabs";
 import { ReviewPanel } from "./ReviewPanel";
+import { ShortcutsDialog } from "./ShortcutsDialog";
 import { SuggestionPanel, type AiPanelState } from "./SuggestionPanel";
 import { Toolbar } from "./Toolbar";
+import { useUnsavedChangesGuard } from "./useUnsavedChangesGuard";
 import { formatNumber } from "@/lib/text/format";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
@@ -64,6 +71,9 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
   saved: "All changes saved",
   error: "Couldn’t save. Retrying when you next edit.",
 };
+
+/** The status while saves are refused because this device's session has ended. */
+const SIGNED_OUT_LABEL = "Not saved: you’re signed out.";
 
 const BLOCK_SEPARATOR = "\n\n";
 
@@ -94,7 +104,16 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   const [title, setTitle] = useState(doc.title === "Untitled document" ? "" : doc.title);
   const [goals, setGoals] = useState<WritingGoals>(doc.goals);
   const [goalsOpen, setGoalsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Whether the document was empty when it opened: the first-run help is for a new document.
+  const [openedEmpty] = useState(() => doc.plainText.trim() === "");
+  // What Alt+] / Alt+[ moved to, for screen readers (focus stays in the text).
+  const [navMessage, setNavMessage] = useState("");
   const [status, setStatus] = useState<SaveStatus>("idle");
+  // Whether the last save was refused with a 401: this device was signed out (a password
+  // change or "Sign out of all other devices" elsewhere, or a session that simply ended). Until
+  // a save goes through again, every retry would be refused too, so the writer is told.
+  const [signedOut, setSignedOut] = useState(false);
   const [text, setText] = useState(doc.plainText);
   // Which blocks are headings: from the saved document until the editor has it, then from the
   // editor on every change. The same string either way, so a review loaded early is not stale.
@@ -116,6 +135,8 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     "suggestions",
   );
   const activeKeyRef = useRef<string | null>(null);
+  const suggestionsRef = useRef<Suggestion[]>([]);
+  suggestionsRef.current = suggestions;
   // The editor is built once; these let its shortcuts and markers reach the current handlers.
   const openFootnoteRef = useRef<(target: FootnoteTarget) => void>(() => {});
   const openLinkRef = useRef<() => void>(() => {});
@@ -125,6 +146,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   goalsRef.current = goals;
   const titleRef = useRef(title);
   titleRef.current = title;
+  const titleInput = useRef<HTMLInputElement>(null);
 
   // Present only while AI suggestions are on and the server can provide them.
   const schedulerRef = useRef<AiScheduler | null>(null);
@@ -158,8 +180,10 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
           if (!res.ok) {
             // Put the fields back so the next save retries them.
             pending.current = { ...patch, ...pending.current };
+            if (res.status === 401) setSignedOut(true);
             throw new Error(`Save failed: ${res.status}`);
           }
+          setSignedOut(false);
         },
         { onStatus: setStatus },
       ),
@@ -350,6 +374,14 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     };
   }, [autosaver]);
 
+  // The browser tab shows the title as it is typed (the server's metadata has the saved one).
+  useEffect(() => {
+    document.title = pageTitle(documentTitle(title));
+  }, [title]);
+
+  // Leaving with an edit not yet saved asks first.
+  useUnsavedChangesGuard(status);
+
   // Selects a range found by the Overview or the Review, and brings it to the middle of the
   // screen (the editor's own scrolling only just reveals it).
   const selectRange = useCallback(
@@ -363,6 +395,68 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     },
     [editor],
   );
+
+  // Alt+] / Alt+[: select the next (previous) suggestion in the text and open its card. Focus
+  // goes to the text, so the writer can fix it there or press Escape to close the card.
+  const goToSuggestion = useCallback(
+    (direction: 1 | -1) => {
+      if (!editor) return;
+      const list = suggestionsRef.current;
+      const target = adjacentSuggestion(
+        list,
+        {
+          activeKey: activeKeyRef.current,
+          from: editor.state.selection.from,
+          to: editor.state.selection.to,
+        },
+        direction,
+      );
+      if (!target) {
+        setNavMessage("No suggestions to move to.");
+        return;
+      }
+      editor.chain().setTextSelection({ from: target.from, to: target.to }).focus().run();
+      activateSuggestion(editor.view, target.key);
+      editor.view.dom
+        .querySelector(`[data-suggestion-key="${CSS.escape(target.key)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      const index = readingOrder(list).findIndex((s) => s.key === target.key) + 1;
+      setNavMessage(`Suggestion ${index} of ${list.length}: ${target.message}`);
+    },
+    [editor],
+  );
+
+  // The editor's own shortcuts, wherever focus is on the page (except in a modal dialog, which
+  // has the keyboard to itself, and keys something else already handled, such as Escape in
+  // the Export menu).
+  useEffect(() => {
+    if (!editor) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing || document.querySelector("dialog[open]")) return;
+      // ProseMirror cancels every Escape (and Enter) typed in the text, handled or not, so only
+      // a key cancelled elsewhere counts as taken.
+      const inText = e.target instanceof Node && editor.view.dom.contains(e.target);
+      if (e.defaultPrevented && !inText) return;
+      const command = matchEditorShortcut(
+        e,
+        isTextField(e.target as Element | null),
+        detectPlatform(navigator),
+      );
+      if (command === null) return;
+      if (command === "close-suggestion") {
+        if (activeKeyRef.current === null) return;
+        e.preventDefault();
+        activateSuggestion(editor.view, null);
+        editor.commands.focus();
+        return;
+      }
+      e.preventDefault();
+      if (command === "show-shortcuts") setShortcutsOpen(true);
+      else goToSuggestion(command === "next-suggestion" ? 1 : -1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editor, goToSuggestion]);
 
   const openFootnote = useCallback((target: FootnoteTarget) => setFootnoteTarget(target), []);
   openFootnoteRef.current = openFootnote;
@@ -474,18 +568,59 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
             Goals
           </button>
           <ExportMenu onExport={exportAs} />
+          <button
+            type="button"
+            onClick={() => setShortcutsOpen(true)}
+            aria-haspopup="dialog"
+            aria-label="Keyboard shortcuts"
+            aria-keyshortcuts="Shift+?"
+            title="Keyboard shortcuts (Shift+?)"
+            className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-muted hover:text-foreground"
+          >
+            Shortcuts
+          </button>
           <span
             className="ml-auto text-xs text-muted"
             role="status"
             aria-live="polite"
             data-testid="save-status"
           >
-            {STATUS_LABEL[status]}
+            {signedOut && status === "error" ? SIGNED_OUT_LABEL : STATUS_LABEL[status]}
           </span>
         </div>
 
+        {signedOut && (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-red-300 bg-red-50 px-5 py-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+            data-print="hide"
+            data-testid="signed-out-notice"
+          >
+            <p className="font-semibold">
+              You were signed out, so your latest changes are not saved yet.
+            </p>
+            <p className="mt-1">
+              Keep this tab open.{" "}
+              <a href={SESSION_EXPIRED_PATH} target="_blank" rel="noopener" className="underline">
+                Sign in again in a new tab
+              </a>
+              , then come back here and keep writing: everything since is saved with your next edit.
+              If you can’t sign in, copy your recent changes somewhere safe before leaving this
+              page.
+            </p>
+          </div>
+        )}
+
         {/* What the importer left out of this document, said once when it first opens. */}
         <ImportNotice documentId={doc.id} />
+        <FirstRunHelp
+          emptyDocument={openedEmpty}
+          ai={ai}
+          onDismissFocus={() => titleInput.current?.focus()}
+        />
+        <p role="status" className="sr-only" data-testid="suggestion-nav-status">
+          {navMessage}
+        </p>
 
         <article
           className="mt-4 rounded-lg border border-border bg-surface px-6 py-8 sm:px-12 sm:py-12"
@@ -497,6 +632,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
             Title
           </label>
           <input
+            ref={titleInput}
             id="doc-title"
             value={title}
             placeholder="Untitled document"
@@ -620,6 +756,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
       </div>
 
       <FootnoteDialog target={footnoteTarget} onDone={finishFootnote} />
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <LinkDialog request={linkRequest} onDone={finishLink} />
 
       <GoalsDialog

@@ -17,7 +17,7 @@ cp .env.example .env
 # Set AUTH_SECRET in .env: Auth.js signs session cookies with it, and will not start without it.
 openssl rand -base64 32   # paste the output as AUTH_SECRET="…"
                           # (or run `npx auth secret`, which writes it to .env.local)
-npm run db:push      # create the local SQLite database
+npm run db:migrate   # create the local SQLite database from prisma/migrations
 npm run dev          # http://localhost:3000, then create an account at /signup
 ```
 
@@ -27,25 +27,50 @@ says that AI suggestions aren’t set up on this server.
 
 `.env` is gitignored; `.env.example` lists every variable and is committed.
 
-Upgrading from an earlier version? Run `npm run db:push` again: it adds new tables (such as
-the one for saved reviews) without touching your documents. Upgrading a local database created
-before accounts existed? `db:push` cannot add the required
+**Database changes are versioned migrations** (`prisma/migrations`): `npm run db:migrate`
+(`prisma migrate deploy`) applies any that a database has not had yet, and is what production
+and the Docker image run. `npm run db:push` still works for quick local experiments (it makes
+the database match `prisma/schema.prisma` without recording a migration), but a database made
+that way has no migration history.
+
+Upgrading a local database from before migrations existed (one made with `db:push`)? Either
+run `npm run db:push` once more (it only adds the new `User.sessionVersion` column, without
+touching your documents) and keep using `db:push`, or move it onto migrations: run
+`npm run db:push`, then `npx prisma migrate resolve --applied 20261017000000_init` (which
+records that the first migration is already in place), and from then on `npm run db:migrate`.
+Upgrading a local database created before accounts existed? Neither can add the required
 `Document.userId` column to existing rows, so reset it with `npx prisma db push --force-reset`
 (this deletes the local documents), then sign up again.
 
 ## Scripts
 
-| Command             | What it does                                               |
-| ------------------- | ---------------------------------------------------------- |
-| `npm run dev`       | Dev server                                                 |
-| `npm run build`     | Production build                                           |
-| `npm test`          | Unit tests (Vitest)                                        |
-| `npm run test:e2e`  | End-to-end tests (Playwright, fresh `prisma/e2e.db` a run) |
-| `npm run lint`      | ESLint                                                     |
-| `npm run typecheck` | TypeScript, no emit                                        |
+| Command              | What it does                                                                     |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `npm run dev`        | Dev server                                                                       |
+| `npm run build`      | Production build                                                                 |
+| `npm start`          | Production server (after `build`)                                                |
+| `npm test`           | Unit tests (Vitest)                                                              |
+| `npm run test:e2e`   | End-to-end tests (Playwright, a fresh `prisma/e2e.db` a run, made by migrations) |
+| `npm run lint`       | ESLint                                                                           |
+| `npm run typecheck`  | TypeScript, no emit                                                              |
+| `npm run db:migrate` | Apply pending migrations (`prisma migrate deploy`)                               |
+| `npm run db:check`   | Fail if `prisma/schema.prisma` has changes no migration makes                    |
+| `npm run db:push`    | Make a local database match the schema directly (quick experiments only)         |
 
 `npm run test:e2e` needs no `.env`: Playwright gives the server a test-only `AUTH_SECRET` and
-`AUTH_TRUST_HOST=true`, so it runs as is in CI.
+`AUTH_TRUST_HOST=true`, so it runs as is in CI. It builds the database with
+`prisma migrate deploy`, so every run also checks that the migrations work.
+
+**Changing the schema?** Edit `prisma/schema.prisma`, then add a migration for it: make a folder
+`prisma/migrations/<YYYYMMDDHHMMSS>_<what-changed>/` and write the SQL with
+`npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url file:./shadow.db --script > prisma/migrations/<that folder>/migration.sql`.
+`npm run db:check` (also run in CI) fails until the two agree.
+
+**CI** (`.github/workflows/ci.yml`) runs on every push and pull request: typecheck, lint, unit
+tests, `db:check`, then the end-to-end tests in Playwright's Chromium; when something fails it
+keeps the Playwright report as a build artifact. A second job builds the Docker image and
+starts it with `docker compose` as in [Deploying](#deploying), and fails unless it becomes
+healthy and runs under an init with no zombie processes.
 
 ## How feedback works
 
@@ -219,6 +244,30 @@ it is dropped (the point it belongs to is kept). Nothing is ever applied to your
   plain click puts the cursor in a link so you can edit its text; Ctrl-click (Cmd-click) opens it
   in a new tab. Links open with `rel="noopener noreferrer nofollow"`.
 
+## Your documents and the keyboard
+
+- **The library** (`/`) lists your documents with a **Search documents** box, which filters by
+  title and by the start of each document's text as you type (case and accents ignored; every
+  word must match), says how many it shows ("2 of 14 documents"), and **Sort by**: Last edited,
+  Title A-Z or Word count (longest first). The browser remembers both; the search only for your
+  account, and it forgets it when you sign out, so the next person on a shared computer does not
+  see what you searched for.
+- **The tab title** is the document's title ("Climate essay · Polaris"), kept up to date as you
+  type it.
+- **Leaving with unsaved changes** (an edit not yet saved, being saved, or whose save failed)
+  makes the browser ask first; at any other time it does not.
+- **First-run help.** A new, empty document shows a short "How Polaris works" card under the
+  toolbar until you choose **Got it**; the browser remembers that. (On a server without an
+  Anthropic key it says AI is not set up, rather than pointing to Settings.)
+- **Keyboard.** **Alt+]** and **Alt+[** (Option on a Mac) move to the next and previous
+  suggestion: the flagged words are selected in the text and their card opens. They are the two
+  keys to the right of P, whatever your layout prints on them, and never a key that types a
+  bracket: where Alt (Option) is how you type "[" or "]" (a German or Spanish Mac, say), the
+  bracket is typed. **Escape** closes
+  the card and puts you back in the text. **Shortcuts** in the toolbar, or **Shift+?** anywhere
+  outside a text field, lists every shortcut (formatting, headings and lists, undo, links,
+  footnotes and these), with the keys named for a Mac or for Windows and Linux.
+
 ## Import
 
 **Import** in the library (or dropping a file on it) makes a new document from a file of up to
@@ -281,8 +330,24 @@ Each writer has an account, and documents are private to it.
   bcrypt, cost 12. A wrong password and an unknown email get the same message and take the
   same time, so the form does not reveal who has an account.
 - **Sessions** are signed, encrypted JWT cookies (30 days), so there is no session table.
-  Signing out clears the cookie on that device. Changing the password does not sign out other
-  devices; deleting the account does, as their requests then find no user.
+  Signing out clears the cookie on that device. **Changing the password signs out every other
+  device**, and so does **Settings → Signed-in devices → Sign out of all other devices** (up to
+  5 times in 15 minutes); the device you do it from stays signed in. Deleting the account signs
+  out every device too, as their requests then find no user. A document left open on a device
+  that was signed out says so as soon as it next tries to save, with a link to sign in again in
+  a new tab; once you have, your next edit there saves everything since.
+- **How revocation works.** Each user has a `sessionVersion` number, and each session's JWT
+  carries the version it was issued with. Every API request and every page load checks it
+  against the database (they already load the user), so a session issued before the version
+  went up is treated as signed out: an API call gets 401, and a page load clears the cookie and
+  goes to the sign-in page. A password change or "Sign out of all other devices" raises the
+  version and, in the same request, re-issues this device's JWT with the new version (Auth.js's
+  `unstable_update`). The raise is a compare-and-swap from the version the asking session was
+  checked against, so a session revoked a moment earlier (a stolen cookie racing its owner) is
+  refused rather than re-issued past the revocation. Only that server request can do this: Auth.js also lets any browser ask
+  to update its own session (`POST /api/auth/session`), but Polaris ignores what such a request
+  asks for, so a signed-out device cannot sign itself back in. Sessions from before versions
+  existed count as version 0, so upgrading signs nobody out.
 - **Privacy.** Every API route calls `requireUser()` and every query is scoped by user id. Another
   writer's document is a 404, exactly like one that does not exist.
 - **Rate limits** (in memory, per server process, sliding windows): 10 sign-in attempts per
@@ -296,8 +361,9 @@ Each writer has an account, and documents are private to it.
   whole server, 10 sign-in attempts per email). Behind nginx, Caddy or a load balancer that
   appends the client address to `X-Forwarded-For`, set `TRUSTED_PROXY_HOPS` to the number of
   such proxies (usually `1`), and make sure clients cannot reach Polaris except through them.
-- **Settings** (`/settings`): display name, the AI suggestions switch (off by default), password
-  change, and account deletion (type your email to confirm; your documents are deleted too).
+- **Settings** (`/settings`): display name, the AI suggestions switch (off by default), a data
+  export, password change, signing out of all other devices, and account deletion (type your
+  email to confirm; your documents are deleted too).
 
 When self-hosting behind a proxy, keep `AUTH_TRUST_HOST=true` only if the proxy sets the `Host`
 and `X-Forwarded-Host` headers itself; otherwise set `AUTH_URL` to the public URL.
@@ -323,6 +389,113 @@ it); `src/auth.ts` adds what needs Node (Prisma, bcrypt) and merges in the provi
 4. Add a "Continue with GitHub" button to `/signin`: a form whose server action calls
    `signIn("github", { redirectTo })`, with `redirectTo` passed through `sanitizeCallbackUrl`.
 
+## Security headers
+
+Every response (pages, API routes, static files) carries `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`,
+`Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()` and
+`Cross-Origin-Opener-Policy: same-origin` (`next.config.ts`), and no `X-Powered-By`.
+
+Pages also get a **Content-Security-Policy** with a fresh nonce for every response, set in
+`src/middleware.ts` (`src/lib/security/headers.ts` builds it):
+
+```
+default-src 'self'; script-src 'self' 'nonce-…' 'strict-dynamic'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none';
+base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+```
+
+Next.js puts the nonce on the scripts it renders, and `'strict-dynamic'` lets them load the
+code they import (the editor, the import and export converters); no other script, inline or
+from elsewhere, runs. Inline styles are allowed (React's style attributes and TipTap's injected
+stylesheet use them; styles cannot run code). Nothing is loaded from another site, and Polaris
+cannot be framed. In development the policy also allows `'unsafe-eval'` and `ws:`, which React's
+fast refresh and the dev server need, and nothing else. Because of the nonce every page is
+rendered per request. An end-to-end test (`e2e/security.spec.ts`) goes through signing up,
+editing, footnotes, links, importing, exporting, the panel tabs and Settings, and fails on any
+CSP violation.
+
+`Strict-Transport-Security` (one year, with subdomains) is sent only with `POLARIS_HSTS=1`. It
+tells browsers to refuse plain HTTP to the host for that year, so set it only once Polaris is
+served over HTTPS (behind a reverse proxy, say): on a plain-HTTP install it would lock everyone
+out. Next.js writes `next.config.ts`'s headers into the build, so `POLARIS_HSTS` is read when the
+app is **built**: rebuild after changing it (`docker compose up -d --build` does).
+
+## Deploying
+
+Polaris is a single Node.js server with a SQLite file, so the simplest deployment is one
+container:
+
+```bash
+git clone https://github.com/vincecarlmoncada285-star/Polaris.git && cd Polaris
+cp .env.example .env
+# In .env: AUTH_SECRET (openssl rand -base64 32), and AUTH_URL or AUTH_TRUST_HOST (below).
+docker compose up -d --build
+curl http://localhost:3000/api/health   # {"ok":true}
+```
+
+The image (`Dockerfile`: multi-stage, `node:22-slim`, runs as the unprivileged `node` user)
+keeps the database at `/data/polaris.db` on the `polaris-data` volume, applies any pending
+migrations (`prisma migrate deploy`) every time it starts, then runs `next start` on port 3000.
+`docker-compose.yml` runs it with Docker's init as PID 1 (`init: true`), which passes on the
+stop signal and reaps orphaned processes; if you run the image without Compose, pass `--init`
+to `docker run` for the same.
+Docker's `HEALTHCHECK` calls `GET /api/health`, which needs no session, is not rate limited,
+and answers `{"ok":true}` (200) when the database responds to a trivial query within 3 seconds,
+or `{"ok":false}` (503) otherwise, with no other detail. Point your load balancer or uptime
+monitor at it too.
+
+| Variable                                                                      | Needed?          | What it does                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_SECRET`                                                                 | Yes              | Signs and encrypts session cookies. Keep it secret and stable: changing it signs everyone out.                                                                                                          |
+| `AUTH_URL`                                                                    | One of these two | The public URL, e.g. `https://polaris.example.edu`.                                                                                                                                                     |
+| `AUTH_TRUST_HOST`                                                             | One of these two | `true` to trust the `Host` and `X-Forwarded-Host` headers instead; only if your proxy sets them itself.                                                                                                 |
+| `TRUSTED_PROXY_HOPS`                                                          | Behind a proxy   | How many reverse proxies append the client address to `X-Forwarded-For` (usually `1`), so per-IP rate limits see real clients ([Accounts](#accounts)). Leave `0` if clients can reach Polaris directly. |
+| `ANTHROPIC_API_KEY`                                                           | For AI           | Enables AI suggestions and reviews ([How feedback works](#how-feedback-works)).                                                                                                                         |
+| `POLARIS_AI_MODEL`, `POLARIS_AI_PARAGRAPH_EFFORT`, `POLARIS_AI_REVIEW_EFFORT` | No               | Model and effort for AI suggestions and reviews.                                                                                                                                                        |
+| `POLARIS_HSTS`                                                                | Once on HTTPS    | `1` sends `Strict-Transport-Security` ([Security headers](#security-headers)). Read at build time.                                                                                                      |
+| `DATABASE_URL`                                                                | No               | Set by the image to `file:/data/polaris.db`; `docker-compose.yml` keeps it there whatever `.env` says.                                                                                                  |
+
+- **HTTPS.** Polaris itself speaks plain HTTP on port 3000. Put a reverse proxy in front for
+  HTTPS (Caddy does it with one line: `polaris.example.edu { reverse_proxy localhost:3000 }`;
+  nginx and most load balancers work too), make port 3000 reachable only from the proxy (in
+  `docker-compose.yml`, change the port to `"127.0.0.1:3000:3000"` when the proxy runs on the
+  same machine), set `TRUSTED_PROXY_HOPS=1`, and either `AUTH_URL` or `AUTH_TRUST_HOST=true`.
+  Then set `POLARIS_HSTS=1` and rebuild.
+- **Backups.** Everything is in one SQLite file. Either copy it while Polaris is stopped
+  (`docker compose stop`, `docker compose cp polaris:/data/polaris.db ./polaris-backup.db`,
+  `docker compose start`), or take a consistent copy while it runs with SQLite's online backup,
+  from the host: `sqlite3 "$(docker volume inspect -f '{{.Mountpoint}}' polaris_polaris-data)/polaris.db" ".backup polaris-backup.db"`.
+  Do not copy the file of a running server any other way: the copy can be torn mid-write. To
+  restore, stop Polaris and put the copy back as `/data/polaris.db`.
+- **Upgrading.** `git pull`, then `docker compose up -d --build`. The new image applies any new
+  migrations when it starts; your data stays on the volume.
+- **Without Docker.** Node 22: `npm ci`, `npm run build`, then `npm run db:migrate` and
+  `npm start` with the variables above in the environment (and `DATABASE_URL` pointing at a file
+  that lives outside the checkout).
+- **More than one server** needs a shared database (switch the Prisma provider to PostgreSQL)
+  and shared rate limits (they are in memory, per process); SQLite suits one server.
+
+## Privacy
+
+What Polaris stores and sends, in one place:
+
+- **Stored** in its database: your account (email, display name, a bcrypt hash of your
+  password, your AI setting), your documents (title, text, writing goals) and up to 5 saved
+  reviews per document. Deleting a document deletes its reviews; deleting your account deletes
+  everything. **Settings → Your data** downloads all your documents.
+- **In your browser only:** the panel tab you last chose, the library's search (for your
+  account only, forgotten when you sign out) and sort, and whether you dismissed the first-run
+  help (localStorage); imported files are converted in the
+  browser and never uploaded.
+- **Sent to Anthropic** only if you switch on AI suggestions and the server has a key:
+  paragraphs you write or change (for suggestions), and the whole document with its title,
+  footnotes and goals when you ask for a review. See [How feedback works](#how-feedback-works)
+  and [Review](#review).
+- **Never logged:** document text, prompts and Claude's output. Polaris loads nothing from other
+  sites (its [Content-Security-Policy](#security-headers) would block it), and sets no tracking
+  or analytics cookies: the only cookies are Auth.js's session and CSRF cookies.
+
 ## Roadmap
 
 - [x] Phase 1: editor, document CRUD, autosave
@@ -338,4 +511,7 @@ it); `src/auth.ts` adds what needs Node (Prisma, bcrypt) and merges in the provi
       jump back into the text)
 - [x] Phase 7, part 1: footnotes, links, import (.docx, Markdown, plain text), export (.docx,
       Markdown, plain text, print / PDF) and a data export of every document
-- [ ] Phase 7, part 2: polish
+- [x] Phase 7, part 2: session revocation, security headers (a nonce-based CSP), polish (library
+      search and sort, tab titles, an unsaved-changes guard, keyboard navigation between
+      suggestions and a shortcuts dialog, error and loading pages, first-run help, a site
+      footer, an icon) and self-hosting (health check, versioned migrations, Docker, CI)

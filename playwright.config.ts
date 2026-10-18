@@ -7,6 +7,8 @@ const chromiumPath = "/opt/pw-browsers/chromium";
 export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
+  // In CI, also an HTML report (playwright-report/), which the workflow uploads on failure.
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: "http://localhost:3100",
     launchOptions: existsSync(chromiumPath) ? { executablePath: chromiumPath } : {},
@@ -29,6 +31,9 @@ export default defineConfig({
       // never call Claude. The AI tests intercept /api/ai/paragraph in the browser instead.
       ANTHROPIC_API_KEY: "",
       ANTHROPIC_AUTH_TOKEN: "",
+      // Plain HTTP here: no Strict-Transport-Security, whatever a local .env says (the headers
+      // test checks it is absent).
+      POLARIS_HSTS: "",
     },
   },
 });

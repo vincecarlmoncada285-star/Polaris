@@ -2,6 +2,11 @@
 
 export const SIGN_IN_PATH = "/signin";
 export const SIGN_UP_PATH = "/signup";
+/**
+ * Clears a session that pages refuse (revoked, or its account gone) and goes to sign in.
+ * Middleware, which trusts the JWT, sends such a session away from /signin itself.
+ */
+export const SESSION_EXPIRED_PATH = "/session/expired";
 
 /**
  * Where sign-up sends a new account whose automatic sign-in was refused (e.g. rate limited),

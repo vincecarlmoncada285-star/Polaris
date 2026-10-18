@@ -5,7 +5,7 @@ import { ACCOUNT_CREATED_PARAM, SIGN_UP_PATH } from "@/lib/auth/routes";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { SignInForm } from "@/components/auth/SignInForm";
 
-export const metadata: Metadata = { title: "Sign in · Polaris" };
+export const metadata: Metadata = { title: "Sign in" };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 

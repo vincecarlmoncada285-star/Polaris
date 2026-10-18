@@ -16,6 +16,8 @@ export interface AuthLimits {
   signUp: RateLimiter;
   /** Per user: a stolen session should not be able to guess the current password quickly. */
   changePassword: RateLimiter;
+  /** Per user: "Sign out of all other devices" (each one re-issues this device's session). */
+  revokeSessions: RateLimiter;
   /** Records a sign-in attempt against both sign-in limits; false if either refuses it. */
   allowSignIn(email: string, ip: string): boolean;
 }
@@ -28,6 +30,7 @@ export function createAuthLimits(now?: () => number): AuthLimits {
     signInPerEmail,
     signUp: createRateLimiter({ limit: 5, windowMs: 60 * MINUTE, now }),
     changePassword: createRateLimiter({ limit: 10, windowMs: 15 * MINUTE, now }),
+    revokeSessions: createRateLimiter({ limit: 5, windowMs: 15 * MINUTE, now }),
     allowSignIn(email, ip) {
       // Per email + IP first: one address hammering away is refused without using up the
       // account's shared allowance.

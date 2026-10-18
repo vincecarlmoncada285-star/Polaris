@@ -1,12 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signUp } from "./helpers";
+import { openLibrary, signUp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await signUp(page);
 });
 
 async function newDocument(page: Page) {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
 }

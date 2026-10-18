@@ -1,5 +1,5 @@
 import { expect, test, type APIRequest, type Page } from "@playwright/test";
-import { signUp } from "./helpers";
+import { openLibrary, signUp } from "./helpers";
 
 // The e2e server has no Anthropic credentials (playwright.config.ts), so nothing here can reach
 // Claude. Where a test needs AI to be available, the browser is told the server is configured
@@ -75,7 +75,7 @@ async function serverAs(page: Page, request: APIRequest) {
 }
 
 async function newDocument(page: Page) {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
 }

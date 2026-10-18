@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CATEGORIES, type Category } from "@/lib/rules/types";
 import type { AiStatus } from "@/lib/editor/ai-scheduler";
 import type { Suggestion } from "@/lib/editor/suggestions";
@@ -91,6 +91,21 @@ export function aiStatusLine(status: AiStatus, now = Date.now()): ReactNode {
   }
 }
 
+/**
+ * How far to scroll a list (by its scrollTop) so that `item` is in its box: nothing when it
+ * already is, otherwise just enough, showing its top if it is taller than the box.
+ */
+export function scrollToShow(
+  box: { top: number; bottom: number },
+  item: { top: number; bottom: number },
+): number {
+  if (item.top < box.top) return item.top - box.top;
+  if (item.bottom > box.bottom) {
+    return Math.min(item.bottom - box.bottom, item.top - box.top);
+  }
+  return 0;
+}
+
 const CATEGORY_COLOR: Record<Category, string> = {
   correctness: "var(--cat-correctness)",
   clarity: "var(--cat-clarity)",
@@ -108,6 +123,29 @@ export function SuggestionPanel({
   onDismiss,
 }: Props) {
   const [filter, setFilter] = useState<Category | "all">("all");
+  const listRef = useRef<HTMLUListElement>(null);
+  // A suggestion opened from the text (a click, or Alt+] / Alt+[) must show its card, even
+  // when the filter hides its category: then the filter goes back to All. Only when the open
+  // suggestion changes, so the writer can still pick a filter while a card is open.
+  const [seenActive, setSeenActive] = useState(activeKey);
+  if (activeKey !== seenActive) {
+    setSeenActive(activeKey);
+    const opened = suggestions.find((s) => s.key === activeKey);
+    if (opened && filter !== "all" && opened.category !== filter) setFilter("all");
+  }
+  // The open card is scrolled into view inside the list, never by scrolling the page: below the
+  // lg breakpoint the panel sits under the article and the list does not scroll on its own, so
+  // there is nothing to do, and moving the page would take the writer away from the text they
+  // just clicked (or from the text Alt+] has just scrolled to).
+  useEffect(() => {
+    if (!activeKey) return;
+    const list = listRef.current;
+    if (!list || list.scrollHeight <= list.clientHeight) return;
+    const cards = list.querySelectorAll("[data-suggestion-key]");
+    const card = [...cards].find((el) => el.getAttribute("data-suggestion-key") === activeKey);
+    if (card)
+      list.scrollTop += scrollToShow(list.getBoundingClientRect(), card.getBoundingClientRect());
+  }, [activeKey]);
   const counts = Object.fromEntries(CATEGORIES.map((c) => [c.id, 0])) as Record<Category, number>;
   for (const s of suggestions) counts[s.category]++;
   const visible = filter === "all" ? suggestions : suggestions.filter((s) => s.category === filter);
@@ -151,7 +189,7 @@ export function SuggestionPanel({
         ))}
       </div>
 
-      <ul className="mt-4 flex-1 space-y-2 overflow-y-auto pb-6">
+      <ul ref={listRef} className="mt-4 flex-1 space-y-2 overflow-y-auto pb-6">
         {visible.length === 0 && (
           <li className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
             {suggestions.length === 0
@@ -166,6 +204,7 @@ export function SuggestionPanel({
             <li
               key={s.key}
               data-testid="suggestion-card"
+              data-suggestion-key={s.key}
               className={`rounded-md border bg-surface text-sm ${active ? "border-accent shadow-sm" : "border-border"}`}
               style={{ borderLeft: `3px solid ${CATEGORY_COLOR[s.category]}` }}
             >

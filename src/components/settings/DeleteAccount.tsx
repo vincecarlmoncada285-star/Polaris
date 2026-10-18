@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { forgetSearch } from "@/lib/documents/library";
 import { FormField } from "../FormField";
 import { errorMessage } from "./api";
 import { SectionCard } from "./SectionCard";
@@ -24,6 +25,7 @@ export function DeleteAccount({ email }: { email: string }) {
       });
       if (!res.ok) throw new Error(await errorMessage(res, "Could not delete your account."));
       // The response already cleared the session cookie; a full load drops all client state.
+      forgetSearch();
       window.location.assign("/signin");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete your account.");

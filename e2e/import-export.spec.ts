@@ -13,7 +13,7 @@ import {
   TextRun,
 } from "docx";
 import JSZip from "jszip";
-import { alertWith, contrastRatio, signUp } from "./helpers";
+import { alertWith, contrastRatio, openLibrary, signUp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await signUp(page);
@@ -84,7 +84,7 @@ async function documentCount(page: Page): Promise<number> {
 test("import a Markdown file: heading, list, link and footnote, titled from its H1", async ({
   page,
 }) => {
-  await page.goto("/");
+  await openLibrary(page);
   await importInput(page).setInputFiles({
     name: "climate-notes.md",
     mimeType: "text/markdown",
@@ -111,7 +111,7 @@ test("import a Markdown file: heading, list, link and footnote, titled from its 
 });
 
 test("import a Word document, and say what was left out", async ({ page }) => {
-  await page.goto("/");
+  await openLibrary(page);
   await importInput(page).setInputFiles({
     name: "lab.docx",
     mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -129,7 +129,7 @@ test("import a Word document, and say what was left out", async ({ page }) => {
 });
 
 test("drop a plain text file on the library to import it", async ({ page }) => {
-  await page.goto("/");
+  await openLibrary(page);
   const dataTransfer = await page.evaluateHandle((text) => {
     const dt = new DataTransfer();
     dt.items.add(new File([text], "field notes.txt", { type: "text/plain" }));
@@ -146,7 +146,7 @@ test("drop a plain text file on the library to import it", async ({ page }) => {
 });
 
 test("a corrupt .docx shows an error and creates no document", async ({ page }) => {
-  await page.goto("/");
+  await openLibrary(page);
   await importInput(page).setInputFiles({
     name: "broken.docx",
     mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -172,7 +172,7 @@ test("a corrupt .docx shows an error and creates no document", async ({ page }) 
 test("import errors are readable in light and dark mode", async ({ page }) => {
   for (const colorScheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme });
-    await page.goto("/");
+    await openLibrary(page);
     await importInput(page).setInputFiles({
       name: "notes.pdf",
       mimeType: "application/pdf",
@@ -202,7 +202,7 @@ test("import errors are readable in light and dark mode", async ({ page }) => {
 });
 
 async function writtenDocument(page: Page) {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
   await page.getByLabel("Title").fill("Climate essay");
@@ -279,7 +279,7 @@ test("export Markdown and Word from the Export menu", async ({ page }) => {
 
 test("the Export menu, and an export that fails, stay on a phone's screen", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 800 });
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
   const onScreen = async (locator: Locator) => {

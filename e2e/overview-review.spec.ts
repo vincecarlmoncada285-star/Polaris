@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signUp } from "./helpers";
+import { openLibrary, signUp } from "./helpers";
 
 // The e2e server has no Anthropic credentials (playwright.config.ts), so nothing here can reach
 // Claude. Where a review is needed, the browser is told the server is configured (/api/me) and
@@ -15,7 +15,7 @@ const PARAGRAPHS = [
 ];
 
 async function newDocument(page: Page) {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
   return new URL(page.url()).pathname.split("/").pop()!;

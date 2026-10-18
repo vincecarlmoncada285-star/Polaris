@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { signUp } from "./helpers";
+import { openLibrary, signUp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await signUp(page);
 });
 
 test("create a document, get feedback, apply it, and persist", async ({ page }) => {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
 
@@ -47,7 +47,7 @@ test("create a document, get feedback, apply it, and persist", async ({ page }) 
 });
 
 test("goals change which citation rules apply", async ({ page }) => {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
   await page.getByLabel("Document body").click();
@@ -63,7 +63,7 @@ test("goals change which citation rules apply", async ({ page }) => {
 });
 
 test("toolbar pressed states follow the cursor, not only typing", async ({ page }) => {
-  await page.goto("/");
+  await openLibrary(page);
   await page.getByRole("button", { name: "New document" }).click();
   await page.waitForURL(/\/documents\//);
   const body = page.getByLabel("Document body");
@@ -71,6 +71,9 @@ test("toolbar pressed states follow the cursor, not only typing", async ({ page 
   await body.click();
   await page.keyboard.type("plain ");
   await bold.click();
+  // TipTap gives the text its focus back on the next animation frame; keys pressed before that
+  // would go to the button (a rare flake on a busy machine).
+  await expect(body).toBeFocused();
   await page.keyboard.type("strong");
   await expect(bold).toHaveAttribute("aria-pressed", "true");
 

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # No .env in CI. Prisma reads the schema's DATABASE_URL even when it does not connect;
+      # the unit tests and the e2e run use databases of their own.
+      DATABASE_URL: file:./ci.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Schema and migrations agree
+        run: npm run db:check
+
+      # playwright.config.ts uses Playwright's own Chromium when /opt/pw-browsers is absent.
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  docker:
+    # The README's quick start, end to end: the image builds (node:22-slim plus OpenSSL for
+    # Prisma), runs its migrations on a fresh volume, passes its own HEALTHCHECK, and runs under
+    # an init that leaves no zombie processes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write a throwaway .env
+        run: |
+          cp .env.example .env
+          sed -i "s|^AUTH_SECRET=.*|AUTH_SECRET=\"$(openssl rand -base64 32)\"|" .env
+
+      - name: Build and start, then wait until healthy
+        run: docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Check the running container
+        run: |
+          test "$(curl -fsS http://localhost:3000/api/health)" = '{"ok":true}'
+          # PID 1 is Docker's init (docker-compose.yml, init: true).
+          test "$(docker compose exec -T polaris cat /proc/1/comm)" = "docker-init"
+          if docker compose exec -T polaris sh -c 'grep -h "^State:" /proc/[0-9]*/status 2>/dev/null' | grep -q zombie; then
+            echo "A zombie process was left in the container." && exit 1
+          fi
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop and remove the container and its volume
+        if: always()
+        run: docker compose down -v
