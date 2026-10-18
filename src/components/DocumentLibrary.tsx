@@ -2,17 +2,39 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
+import {
+  DEFAULT_SORT,
+  LIBRARY_SORTS,
+  isLibrarySort,
+  libraryView,
+  type LibrarySort,
+} from "@/lib/documents/library";
 import type { DocumentSummary } from "@/lib/documents/service";
 import { MAX_CONTENT_BYTES } from "@/lib/documents/schema";
 import { IMPORT_ACCEPT, ImportError, convertFile, type ImportProgress } from "@/lib/import";
 import { importNotice, saveImportNotice } from "@/lib/import/notice";
+import { readLocal, writeLocal } from "@/lib/local-storage";
 import { formatNumber } from "@/lib/text/format";
 import { LocalDateTime } from "./LocalDateTime";
 
 const IMPORT_FAILED = "Polaris couldn’t import this file. Please try again.";
 const IMPORT_TOO_BIG =
   "This document is too large to import: once converted it is over 5 MB. Try splitting it into parts.";
+
+/** localStorage keys: the library's search and sort, remembered in this browser. */
+export const LIBRARY_SEARCH_KEY = "polaris:library-search";
+export const LIBRARY_SORT_KEY = "polaris:library-sort";
+
+/** "3 documents", or "2 of 3 documents" while a search hides some. */
+export function resultCountText(shown: number, total: number): string {
+  const noun = total === 1 ? "document" : "documents";
+  return shown === total
+    ? `${formatNumber(total)} ${noun}`
+    : `${formatNumber(shown)} of ${formatNumber(total)} ${noun}`;
+}
+
+const subscribe = () => () => {};
 
 function progressText(file: string, p: ImportProgress): string {
   if (p.stage === "reading") {
@@ -31,6 +53,29 @@ export function DocumentLibrary({ initialDocuments }: { initialDocuments: Docume
   );
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // The first render matches the server's (no storage there); the remembered search and sort
+  // are applied right after.
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<LibrarySort>(DEFAULT_SORT);
+  useEffect(() => {
+    const storedSort = readLocal(LIBRARY_SORT_KEY);
+    if (isLibrarySort(storedSort)) setSort(storedSort);
+    const storedQuery = readLocal(LIBRARY_SEARCH_KEY);
+    if (storedQuery) setQuery(storedQuery);
+  }, []);
+  const shown = useMemo(() => libraryView(docs, query, sort), [docs, query, sort]);
+  // False in the server's render and during hydration, true once the controls respond: the
+  // page can stream in behind its loading skeleton, and tests wait for this before acting.
+  const hydrated = useSyncExternalStore(
+    subscribe,
+    () => true,
+    () => false,
+  );
+
+  const search = (value: string) => {
+    setQuery(value);
+    writeLocal(LIBRARY_SEARCH_KEY, value.trim() ? value : null);
+  };
 
   /**
    * Converts the file here in the browser and creates a document from the result: the file
@@ -101,7 +146,7 @@ export function DocumentLibrary({ initialDocuments }: { initialDocuments: Docume
   }
 
   return (
-    <section aria-labelledby="library-heading">
+    <section aria-labelledby="library-heading" data-ready={hydrated || undefined}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <h1 id="library-heading" className="font-serif text-3xl font-semibold">
           Your documents
@@ -184,29 +229,99 @@ export function DocumentLibrary({ initialDocuments }: { initialDocuments: Docume
           <p className="mt-1 text-sm">Start one and Polaris will give feedback as you write.</p>
         </div>
       ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border bg-surface">
-          {docs.map((doc) => (
-            <li key={doc.id} className="group flex items-start gap-4 p-4">
-              <Link href={`/documents/${doc.id}`} className="min-w-0 flex-1">
-                <p className="truncate font-medium group-hover:text-accent">{doc.title}</p>
-                <p className="mt-1 line-clamp-2 text-sm text-muted">
-                  {doc.excerpt || <em>Empty document</em>}
-                </p>
-                <p className="mt-2 text-xs text-muted">
-                  {formatNumber(doc.wordCount)} words · edited <LocalDateTime iso={doc.updatedAt} />
-                </p>
-              </Link>
-              <button
-                type="button"
-                onClick={() => deleteDocument(doc)}
-                className="rounded px-2 py-1 text-sm text-muted hover:bg-background hover:text-red-600"
-                aria-label={`Delete ${doc.title}`}
+        <>
+          <div role="search" className="mb-2 flex flex-wrap items-end gap-3">
+            <div className="min-w-48 flex-1 text-sm">
+              <label htmlFor="library-search" className="font-medium">
+                Search documents
+              </label>
+              <input
+                id="library-search"
+                type="search"
+                value={query}
+                onChange={(e) => search(e.target.value)}
+                placeholder="Title or text"
+                autoComplete="off"
+                aria-describedby="library-count"
+                className="mt-1 block w-full rounded-md border border-border bg-surface px-3 py-2"
+              />
+            </div>
+            <div className="text-sm">
+              <label htmlFor="library-sort" className="font-medium">
+                Sort by
+              </label>
+              <select
+                id="library-sort"
+                value={sort}
+                onChange={(e) => {
+                  if (!isLibrarySort(e.target.value)) return;
+                  setSort(e.target.value);
+                  writeLocal(LIBRARY_SORT_KEY, e.target.value);
+                }}
+                className="mt-1 block rounded-md border border-border bg-surface px-3 py-2"
               >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
+                {LIBRARY_SORTS.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <p
+            id="library-count"
+            role="status"
+            className="mb-3 text-sm text-muted"
+            data-testid="library-count"
+          >
+            {resultCountText(shown.length, docs.length)}
+          </p>
+          {shown.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border p-8 text-center text-muted">
+              <p className="font-serif text-lg">No documents match “{query.trim()}”.</p>
+              <p className="mt-1 text-sm">
+                Search looks at titles and the start of each document.{" "}
+                <button
+                  type="button"
+                  onClick={() => search("")}
+                  className="font-medium text-accent underline"
+                >
+                  Clear search
+                </button>
+              </p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-border rounded-lg border border-border bg-surface">
+              {shown.map((doc) => (
+                <li key={doc.id} className="group flex items-start gap-4 p-4">
+                  <Link href={`/documents/${doc.id}`} className="min-w-0 flex-1">
+                    <p
+                      className="truncate font-medium group-hover:text-accent"
+                      data-testid="library-item-title"
+                    >
+                      {doc.title}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-sm text-muted">
+                      {doc.excerpt || <em>Empty document</em>}
+                    </p>
+                    <p className="mt-2 text-xs text-muted">
+                      {formatNumber(doc.wordCount)} words · edited{" "}
+                      <LocalDateTime iso={doc.updatedAt} />
+                    </p>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => deleteDocument(doc)}
+                    className="rounded px-2 py-1 text-sm text-muted hover:bg-background hover:text-red-600"
+                    aria-label={`Delete ${doc.title}`}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </section>
   );

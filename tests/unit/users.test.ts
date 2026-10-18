@@ -123,8 +123,10 @@ describe("verifyCredentials", () => {
   it("returns the user for the right password, in any email case", async () => {
     const email = uniqueEmail();
     const created = await service.createUser({ email, password: PASSWORD });
-    expect(await service.verifyCredentials(email, PASSWORD)).toEqual(created);
-    expect(await service.verifyCredentials(` ${email.toUpperCase()}`, PASSWORD)).toEqual(created);
+    // With the session version a new session is issued with (0 for a new account).
+    const expected = { ...created, sessionVersion: 0 };
+    expect(await service.verifyCredentials(email, PASSWORD)).toEqual(expected);
+    expect(await service.verifyCredentials(` ${email.toUpperCase()}`, PASSWORD)).toEqual(expected);
   });
 
   it("returns null for a wrong password", async () => {
@@ -208,6 +210,29 @@ describe("changePassword", () => {
     expect(await service.verifyCredentials(email, PASSWORD)).toBeNull();
   });
 
+  it("raises the session version with the new password, and returns it", async () => {
+    const email = uniqueEmail();
+    const user = await service.createUser({ email, password: PASSWORD });
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(0);
+    expect(await service.changePassword(user.id, PASSWORD, "a brand new password")).toBe(1);
+    expect(await service.getSessionUser(user.id)).toEqual({ user, sessionVersion: 1 });
+    expect(await service.changePassword(user.id, "a brand new password", "and another one")).toBe(
+      2,
+    );
+    expect((await service.verifyCredentials(email, "and another one"))?.sessionVersion).toBe(2);
+  });
+
+  it("leaves the session version alone when the change is refused", async () => {
+    const user = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    await expect(
+      service.changePassword(user.id, "not my password", "a brand new password"),
+    ).rejects.toBeInstanceOf(IncorrectPasswordError);
+    await expect(service.changePassword(user.id, PASSWORD, "short")).rejects.toBeInstanceOf(
+      ZodError,
+    );
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(0);
+  });
+
   it("rejects a too-short new password without changing anything", async () => {
     const email = uniqueEmail();
     const user = await service.createUser({ email, password: PASSWORD });
@@ -221,6 +246,24 @@ describe("changePassword", () => {
     await expect(
       service.changePassword("missing", PASSWORD, "a brand new password"),
     ).rejects.toBeInstanceOf(IncorrectPasswordError);
+  });
+});
+
+describe("revokeSessions", () => {
+  it("raises the session version each time and returns it; nobody else's changes", async () => {
+    const user = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    const other = await service.createUser({ email: uniqueEmail(), password: PASSWORD });
+    expect(await service.revokeSessions(user.id)).toBe(1);
+    expect(await service.revokeSessions(user.id)).toBe(2);
+    expect((await service.getSessionUser(user.id))?.sessionVersion).toBe(2);
+    expect((await service.getSessionUser(other.id))?.sessionVersion).toBe(0);
+    // The password is untouched.
+    expect(await service.verifyCredentials(user.email, PASSWORD)).not.toBeNull();
+  });
+
+  it("returns null for an unknown user", async () => {
+    expect(await service.revokeSessions("missing")).toBeNull();
+    expect(await service.getSessionUser("missing")).toBeNull();
   });
 });
 

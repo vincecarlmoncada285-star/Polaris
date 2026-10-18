@@ -18,12 +18,17 @@ export const authConfig = {
       return decision.kind === "redirect" ? Response.redirect(new URL(decision.to, nextUrl)) : true;
     },
     jwt({ token, user }) {
-      // `user` is only present on sign-in; afterwards the id rides along in the token.
-      if (user?.id) token.id = user.id;
+      // `user` is only present on sign-in; afterwards the id and the session version it was
+      // issued with ride along in the token (see src/lib/auth/session-version.ts).
+      if (user?.id) {
+        token.id = user.id;
+        token.sessionVersion = user.sessionVersion ?? 0;
+      }
       return token;
     },
     session({ session, token }) {
       if (typeof token.id === "string") session.user.id = token.id;
+      if (typeof token.sessionVersion === "number") session.sessionVersion = token.sessionVersion;
       return session;
     },
   },

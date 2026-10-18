@@ -1,0 +1,27 @@
+# Polaris with its SQLite database on a named volume.
+#
+#   cp .env.example .env    # then set AUTH_SECRET (and AUTH_URL, TRUSTED_PROXY_HOPS, ...)
+#   docker compose up -d --build
+#
+# Then put an HTTPS reverse proxy in front of port 3000 (README, "Deploying").
+services:
+  polaris:
+    build:
+      context: .
+      args:
+        # Read when the image is built (Next.js bakes headers into the build): set
+        # POLARIS_HSTS=1 in .env only once Polaris is served over HTTPS, then rebuild.
+        POLARIS_HSTS: ${POLARIS_HSTS:-0}
+    image: polaris:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      # The image's database path, whatever .env says for local development.
+      DATABASE_URL: file:/data/polaris.db
+    volumes:
+      - polaris-data:/data
+
+volumes:
+  polaris-data:

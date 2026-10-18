@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { readLocal, writeLocal } from "@/lib/local-storage";
 
 export interface PanelTab<Id extends string> {
   id: Id;
@@ -17,20 +18,8 @@ export interface PanelTab<Id extends string> {
 
 /** The browser's remembered tab, if it is one of `ids`. Storage can be blocked: then null. */
 function readStored<Id extends string>(key: string, ids: readonly Id[]): Id | null {
-  try {
-    const value = window.localStorage.getItem(key);
-    return ids.find((id) => id === value) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function store(key: string, value: string) {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Private mode or blocked storage: the choice just is not remembered.
-  }
+  const value = readLocal(key);
+  return ids.find((id) => id === value) ?? null;
 }
 
 /**
@@ -54,7 +43,7 @@ export function useRememberedTab<Id extends string>(
   const select = useCallback(
     (id: Id) => {
       setSelected(id);
-      store(key, id);
+      writeLocal(key, id);
     },
     [key],
   );

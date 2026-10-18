@@ -7,8 +7,23 @@ TipTap 3 + Prisma (SQLite locally) + Auth.js v5 + Vitest + Playwright.
 
 - `npm test`: unit tests. Run them before every commit.
 - `npm run test:e2e`: builds and serves on :3100 against a fresh `prisma/e2e.db` (recreated
-  each run). Playwright passes a test-only `AUTH_SECRET`, so no `.env` is needed.
+  each run by `prisma migrate deploy`, so the migrations run every time). Playwright passes a
+  test-only `AUTH_SECRET` (and `POLARIS_HSTS=""`), so no `.env` is needed.
 - `npm run typecheck && npm run lint`
+- `npm run db:migrate` (`prisma migrate deploy`): what production and the Docker image use.
+  `npm run db:check` (`scripts/db-check.mjs`): `prisma migrate diff --from-migrations
+prisma/migrations --to-schema-datamodel prisma/schema.prisma --exit-code` against a temporary
+  SQLite shadow file; fails when they differ. `npm run db:push` is for quick local experiments
+  only (no migration history); never run destructive commands on `prisma/dev.db`.
+- CI (`.github/workflows/ci.yml`, push and pull_request): Node 22, `npm ci`, typecheck, lint,
+  `npm test`, `db:check`, Playwright's own Chromium, `npm run test:e2e`; the Playwright report
+  (HTML in CI, `playwright.config.ts`) is uploaded on failure.
+- Docker: `Dockerfile` (multi-stage `node:22-slim` + openssl for Prisma; runtime = prod
+  dependencies, which include the Prisma CLI, plus `typescript` because `next start` reads
+  `next.config.ts` with it; non-root `node` user; `/data` volume with
+  `DATABASE_URL=file:/data/polaris.db`; `prisma migrate deploy` then `next start`; HEALTHCHECK
+  on `/api/health`), `.dockerignore`, `docker-compose.yml` (one service, the volume, `.env` as
+  env_file, port 3000, `POLARIS_HSTS` as a build arg).
 - `overrides` in package.json gives mammoth argparse 2.0.1: argparse 1 pulls in sprintf-js
   (GHSA-hp3w-g68c-fv3c, no fixed version), only mammoth's CLI uses argparse, and 2.x keeps its
   old method names. Remove the override once mammoth depends on argparse 2.
@@ -66,6 +81,8 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
     the client, review types and word limits; plain zod).
   - Routes: `src/app/api/ai/paragraph/route.ts`; `src/app/api/documents/[id]/review/route.ts`
     (POST runs and saves a review, `maxDuration = 300`; GET returns the latest with `stale`).
+- `prisma/migrations/`: versioned migrations (`<timestamp>_<name>/migration.sql`,
+  `migration_lock.toml` for sqlite); the first, `20261017000000_init`, is the whole schema.
 - `src/lib/documents/`: zod schemas (goals include the optional `targetWords`; create accepts
   an import's title, content and plainText under the update limits) + service (takes a
   PrismaClient, so tests use a temp DB). Every method takes `userId` first; `exportPage()` pages
@@ -81,18 +98,47 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   metrics (sentences via `splitSentences`, passive via the `passiveVoice` rule, Flesch scores
   with a documented syllable heuristic, MATTR, repeated openers, longest-sentence offsets).
 - `src/lib/users/`: zod schemas + users service (create, verifyCredentials, profile, password,
-  delete). Same PrismaClient-injection pattern.
+  delete, `getSessionUser()`, `revokeSessions()`; `changePassword` raises `sessionVersion` in
+  the same write and returns it). Same PrismaClient-injection pattern.
 - Auth (Auth.js v5, Credentials + JWT sessions):
   - `src/auth.config.ts`: edge-safe config (pages, `authorized`, jwt/session callbacks). Used by
     `src/middleware.ts`. Never import Prisma or bcrypt here.
   - `src/auth.ts`: full config (Credentials provider, sign-in rate limit); exports
     `handlers, auth, signIn, signOut`. Route handler: `src/app/api/auth/[...nextauth]/route.ts`.
   - `src/lib/auth/session.ts`: `requireUser()` for API routes, `getCurrentUser()` and
-    `requirePageUser()` for server components.
+    `requirePageUser()` for server components. All three refuse a session whose JWT
+    `sessionVersion` differs from the user's (`User.sessionVersion`; a missing one counts as 0):
+    401, or `/session/expired`, which clears the cookie.
+  - `src/lib/auth/session-version.ts` (Node only): `sessionVersionMatches()`,
+    `reissueSession(userId, version, unstable_update)` (runs Auth.js's update inside an
+    AsyncLocalStorage scope) and `applyReissue()`, which `src/auth.ts`'s jwt callback calls on
+    `trigger: "update"`: it moves the token to the new version only inside that scope, so a
+    browser's own `POST /api/auth/session` changes nothing. Used by `POST /api/me/password` and
+    `POST /api/me/sign-out-others` (rate limited, `limits.revokeSessions`).
   - `src/lib/auth/`: `routes.ts` (what middleware protects), `callback-url.ts` (open-redirect
     sanitizer), `actions.ts` (sign-in/up/out server actions), `limits.ts` (auth rate limits; `clientIp()` trusts X-Forwarded-For only with
     `TRUSTED_PROXY_HOPS`).
   - `src/types/next-auth.d.ts`: types `session.user.id` as string.
+- `src/middleware.ts`: the edge-safe `authorized` redirects, then a per-request CSP nonce for
+  every page (matcher: everything but `api/`, `_next/` and the icon, so a dotted 404 path gets
+  it too): `x-nonce` and `Content-Security-Policy` on the request (Next.js nonces its own
+  scripts from it) and the CSP on the response. `src/lib/security/headers.ts`:
+  `createNonce()`, `contentSecurityPolicy({ nonce, dev })` (dev adds only `'unsafe-eval'` and
+  `ws:`) and `securityHeaders(env)`, the static headers `next.config.ts` sends on every path
+  (HSTS only with `POLARIS_HSTS=1`, read at build time; `poweredByHeader: false`). No path
+  aliases there: `next.config.ts` imports it relatively. Never add an inline script or a
+  third-party origin; `e2e/security.spec.ts` fails on any CSP violation.
+- `src/app/api/health/route.ts`: `GET /api/health`, no session, no rate limit, `SELECT 1` with a
+  3 s timeout: `{ ok: true }` 200 or `{ ok: false }` 503, `Cache-Control: no-store`, nothing else.
+- Pages: `src/app/(library)/` (route group: `layout.tsx` checks the session before the
+  `loading.tsx` skeleton's Suspense boundary, so a redirect is a real 307), and
+  `src/app/documents/[id]/` (`layout.tsx` checks the session and the document, so a missing
+  or someone else's document is a real 404 even though the page streams behind `loading.tsx`;
+  `load.ts` is the per-request cached loader; `generateMetadata` gives the tab title). Titles
+  use the root layout's template (`src/lib/page-title.ts`: "<name> · Polaris"). `error.tsx`
+  and `global-error.tsx` render `ErrorMessage` (Try again = `reset`, a link home, only the
+  digest, never the message). `SiteFooter` is on every page (also in `global-error.tsx`).
+  `icon.svg` is the favicon; the root layout sets the description and light/dark theme-color.
 - `src/lib/rate-limit.ts`: generic in-memory sliding-window limiter with an injectable clock.
   Reuse it for AI routes.
 - `src/lib/autosave.ts`: debounced, serialized saver. Anything holding unsaved edits registers
@@ -108,7 +154,18 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   from `blockLayout()` in `src/lib/editor/locate.ts`, the footnotes from `footnotesLayout()` in
   `blocks.ts`. Also `FootnoteDialog.tsx`, `FootnoteList.tsx` (under the article), `LinkDialog.tsx`,
   `ImportNotice.tsx` (its live region is always rendered) and `ExportMenu.tsx` (a WAI-ARIA menu
-  button).
+  button). `DocumentLibrary.tsx` searches and sorts in the browser (`src/lib/documents/library.ts`:
+  `searchDocuments`, `sortDocuments`, both remembered via `src/lib/local-storage.ts`, which wraps
+  every localStorage call in try/catch) and sets `data-ready` once hydrated (e2e waits for it:
+  `openLibrary()` in `e2e/helpers.ts`). `DocumentEditor.tsx` also keeps `document.title` in step
+  with the title, guards unload while the autosaver is pending/saving/error
+  (`useUnsavedChangesGuard.ts`), shows `FirstRunHelp.tsx` on a document that opened empty
+  (dismissal in localStorage), and handles the page-level shortcuts on window keydown:
+  Alt+] / Alt+[ (`src/lib/editor/suggestion-nav.ts`), Escape (ProseMirror cancels every Escape
+  in the text, so that one counts even though defaultPrevented) and Shift+? outside text fields,
+  which opens `ShortcutsDialog.tsx`. `src/lib/shortcuts.ts` is the one list of shortcuts, the
+  Mac/other key names and `matchEditorShortcut()`; `tests/unit/shortcuts.test.ts` fails if an
+  editor extension gains a binding the list lacks. Settings has `settings/OtherDevices.tsx`.
 - `src/lib/import/`: in the browser, lazily loaded. `index.ts` (`convertFile()`: extension and
   10 MB checks, FileReader progress, dynamic import of the converter), `docx.ts` (mammoth with a
   style map; its note references and list become footnotes; comments and tracked deletions
@@ -143,6 +200,7 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
 - Server-rendered numbers go through `formatNumber()` (`src/lib/text/format.ts`, fixed en-US locale)
   and dates through `<LocalDateTime>`; the runtime's own locale or timezone would make the server
   and browser text differ (a hydration mismatch). `e2e/locale.spec.ts` checks this.
+- Schema changes need a new migration (prisma migrate diff ... --script) and db:check must pass.
 - E2E tests sign up a fresh user with `signUp()` from `e2e/helpers.ts` (it also gives each
   context its own IP via X-Forwarded-For, which the e2e server trusts because Playwright sets
   `TRUSTED_PROXY_HOPS=1`; by default the app ignores that header).

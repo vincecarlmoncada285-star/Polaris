@@ -5,17 +5,23 @@ import { auth } from "@/auth";
 import { users } from "@/lib/users";
 import type { UserDTO } from "@/lib/users/service";
 import { SIGN_IN_PATH } from "./routes";
+import { sessionVersionMatches } from "./session-version";
 
 export const SESSION_EXPIRED_PATH = "/session/expired";
 
 /**
  * The signed-in user, loaded fresh from the database (so a renamed user shows the new name
- * straight away), or null. Cached per request: the layout and the page share one lookup.
+ * straight away), or null. Null too for a session that was revoked: one issued with an older
+ * session version than the user's (a password change, or "Sign out of all other devices", since
+ * it was issued). Cached per request: the layout and the page share one lookup.
  */
 export const getCurrentUser = cache(async (): Promise<UserDTO | null> => {
   const session = await auth();
   const id = session?.user?.id;
-  return id ? users.getUser(id) : null;
+  if (!id) return null;
+  const found = await users.getSessionUser(id);
+  if (!found || !sessionVersionMatches(session.sessionVersion, found.sessionVersion)) return null;
+  return found.user;
 });
 
 /**
@@ -24,7 +30,7 @@ export const getCurrentUser = cache(async (): Promise<UserDTO | null> => {
  *   const userId = await requireUser();
  *   if (userId instanceof NextResponse) return userId;
  *
- * Checks the database too, so a session that outlived its account is rejected.
+ * Checks the database too, so a session that outlived its account, or was revoked, is rejected.
  */
 export async function requireUser(): Promise<string | NextResponse> {
   const user = await getCurrentUser();
@@ -34,7 +40,8 @@ export async function requireUser(): Promise<string | NextResponse> {
 /**
  * For server components of protected pages. Middleware has already redirected signed-out
  * visitors; this covers a valid session whose account no longer exists (deleted elsewhere, or
- * a reset dev database), which middleware cannot see without the database.
+ * a reset dev database) or that was revoked, which middleware cannot see without the database:
+ * /session/expired clears its cookie and sends it to sign in.
  */
 export async function requirePageUser(callbackPath: string): Promise<UserDTO> {
   const user = await getCurrentUser();

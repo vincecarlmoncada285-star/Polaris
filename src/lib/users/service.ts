@@ -26,6 +26,12 @@ export interface UserDTO {
   createdAt: string;
 }
 
+/**
+ * A user as a session sees it: with the version every session JWT must carry (see
+ * `sessionVersion` in prisma/schema.prisma). Server-side only; never sent to the browser.
+ */
+export type SessionUser = UserDTO & { sessionVersion: number };
+
 export class EmailTakenError extends Error {
   constructor() {
     super("An account with this email already exists");
@@ -44,6 +50,8 @@ const userSelect = { id: true, email: true, name: true, aiEnabled: true, created
 
 type Row = { id: string; email: string; name: string | null; aiEnabled: boolean; createdAt: Date };
 
+const sessionUserSelect = { ...userSelect, sessionVersion: true } as const;
+
 function toDTO(row: Row): UserDTO {
   return {
     id: row.id,
@@ -52,6 +60,10 @@ function toDTO(row: Row): UserDTO {
     aiEnabled: row.aiEnabled,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+function toSessionUser(row: Row & { sessionVersion: number }): SessionUser {
+  return { ...toDTO(row), sessionVersion: row.sessionVersion };
 }
 
 function prismaCode(e: unknown): string | undefined {
@@ -82,25 +94,34 @@ export function createUserService(db: PrismaClient) {
       }
     },
 
-    /** The user for this email and password, or null. Takes the same time either way. */
-    async verifyCredentials(email: string, password: string): Promise<UserDTO | null> {
+    /**
+     * The user for this email and password, or null. Takes the same time either way. Carries
+     * the session version, which the new session's JWT is issued with.
+     */
+    async verifyCredentials(email: string, password: string): Promise<SessionUser | null> {
       const parsed = emailSchema.safeParse(email);
       const row = parsed.success
         ? await db.user.findUnique({
             where: { email: parsed.data },
-            select: { ...userSelect, passwordHash: true },
+            select: { ...sessionUserSelect, passwordHash: true },
           })
         : null;
       if (!row) {
         await compare(password, DUMMY_PASSWORD_HASH);
         return null;
       }
-      return (await compare(password, row.passwordHash)) ? toDTO(row) : null;
+      return (await compare(password, row.passwordHash)) ? toSessionUser(row) : null;
     },
 
     async getUser(id: string): Promise<UserDTO | null> {
       const row = await db.user.findUnique({ where: { id }, select: userSelect });
       return row ? toDTO(row) : null;
+    },
+
+    /** The user and their current session version, for checking a session against. */
+    async getSessionUser(id: string): Promise<{ user: UserDTO; sessionVersion: number } | null> {
+      const row = await db.user.findUnique({ where: { id }, select: sessionUserSelect });
+      return row ? { user: toDTO(row), sessionVersion: row.sessionVersion } : null;
     },
 
     /** Throws ZodError for invalid input; null when the user does not exist. */
@@ -114,8 +135,12 @@ export function createUserService(db: PrismaClient) {
       }
     },
 
-    /** Throws IncorrectPasswordError unless `current` matches, and ZodError for a weak `next`. */
-    async changePassword(id: string, current: string, next: string): Promise<void> {
+    /**
+     * Throws IncorrectPasswordError unless `current` matches, and ZodError for a weak `next`.
+     * Raises the session version in the same write, so every session issued before the change
+     * is signed out, and returns the new version (for re-issuing the caller's own session).
+     */
+    async changePassword(id: string, current: string, next: string): Promise<number> {
       const nextPassword = passwordSchema.parse(next);
       const row = await db.user.findUnique({ where: { id }, select: { passwordHash: true } });
       if (!row) {
@@ -126,11 +151,35 @@ export function createUserService(db: PrismaClient) {
       const passwordHash = await hash(nextPassword, BCRYPT_COST);
       // Compare-and-swap on the old hash: if the password changed while we were hashing,
       // the check above was against a stale value.
-      const { count } = await db.user.updateMany({
-        where: { id, passwordHash: row.passwordHash },
-        data: { passwordHash },
-      });
-      if (count === 0) throw new IncorrectPasswordError();
+      try {
+        const updated = await db.user.update({
+          where: { id, passwordHash: row.passwordHash },
+          data: { passwordHash, sessionVersion: { increment: 1 } },
+          select: { sessionVersion: true },
+        });
+        return updated.sessionVersion;
+      } catch (e) {
+        if (prismaCode(e) === "P2025") throw new IncorrectPasswordError();
+        throw e;
+      }
+    },
+
+    /**
+     * Raises the session version, which signs out every session issued before (the caller
+     * re-issues its own). The new version, or null when the user does not exist.
+     */
+    async revokeSessions(id: string): Promise<number | null> {
+      try {
+        const updated = await db.user.update({
+          where: { id },
+          data: { sessionVersion: { increment: 1 } },
+          select: { sessionVersion: true },
+        });
+        return updated.sessionVersion;
+      } catch (e) {
+        if (prismaCode(e) === "P2025") return null;
+        throw e;
+      }
     },
 
     /** Deletes the user and, through the foreign key, all their documents. */

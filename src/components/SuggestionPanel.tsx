@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CATEGORIES, type Category } from "@/lib/rules/types";
 import type { AiStatus } from "@/lib/editor/ai-scheduler";
 import type { Suggestion } from "@/lib/editor/suggestions";
@@ -108,6 +108,22 @@ export function SuggestionPanel({
   onDismiss,
 }: Props) {
   const [filter, setFilter] = useState<Category | "all">("all");
+  const listRef = useRef<HTMLUListElement>(null);
+  // A suggestion opened from the text (a click, or Alt+] / Alt+[) must show its card, even
+  // when the filter hides its category: then the filter goes back to All. Only when the open
+  // suggestion changes, so the writer can still pick a filter while a card is open.
+  const [seenActive, setSeenActive] = useState(activeKey);
+  if (activeKey !== seenActive) {
+    setSeenActive(activeKey);
+    const opened = suggestions.find((s) => s.key === activeKey);
+    if (opened && filter !== "all" && opened.category !== filter) setFilter("all");
+  }
+  useEffect(() => {
+    if (!activeKey) return;
+    const cards = listRef.current?.querySelectorAll("[data-suggestion-key]") ?? [];
+    const card = [...cards].find((el) => el.getAttribute("data-suggestion-key") === activeKey);
+    card?.scrollIntoView?.({ block: "nearest" });
+  }, [activeKey]);
   const counts = Object.fromEntries(CATEGORIES.map((c) => [c.id, 0])) as Record<Category, number>;
   for (const s of suggestions) counts[s.category]++;
   const visible = filter === "all" ? suggestions : suggestions.filter((s) => s.category === filter);
@@ -151,7 +167,7 @@ export function SuggestionPanel({
         ))}
       </div>
 
-      <ul className="mt-4 flex-1 space-y-2 overflow-y-auto pb-6">
+      <ul ref={listRef} className="mt-4 flex-1 space-y-2 overflow-y-auto pb-6">
         {visible.length === 0 && (
           <li className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
             {suggestions.length === 0
@@ -166,6 +182,7 @@ export function SuggestionPanel({
             <li
               key={s.key}
               data-testid="suggestion-card"
+              data-suggestion-key={s.key}
               className={`rounded-md border bg-surface text-sm ${active ? "border-accent shadow-sm" : "border-border"}`}
               style={{ borderLeft: `3px solid ${CATEGORY_COLOR[s.category]}` }}
             >

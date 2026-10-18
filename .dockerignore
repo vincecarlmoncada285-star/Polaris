@@ -1,0 +1,22 @@
+# Built inside the image instead.
+node_modules
+.next
+# Secrets and local databases never go into an image.
+.env
+.env*
+!.env.example
+*.db
+*.db-journal
+prisma/*.db
+# Test output and tooling.
+test-results
+playwright-report
+coverage
+*.tsbuildinfo
+.git
+.github
+.husky
+polaris.bundle
+Dockerfile
+docker-compose.yml
+.dockerignore

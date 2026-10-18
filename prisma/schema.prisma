@@ -8,17 +8,20 @@ datasource db {
 }
 
 model User {
-  id           String           @id @default(cuid())
+  id             String           @id @default(cuid())
   // Stored trimmed and lowercased (see src/lib/users/schema.ts).
-  email        String           @unique
-  name         String?
-  passwordHash String
+  email          String           @unique
+  name           String?
+  passwordHash   String
   // Opt-in: AI suggestions and reviews send document text to the Claude API.
-  aiEnabled    Boolean          @default(false)
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  documents    Document[]
-  reviews      DocumentReview[]
+  aiEnabled      Boolean          @default(false)
+  // Session JWTs carry the version they were issued with; one that differs is signed out.
+  // Raised by a password change and by "Sign out of all other devices" (src/lib/auth/session.ts).
+  sessionVersion Int              @default(0)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  documents      Document[]
+  reviews        DocumentReview[]
 }
 
 model Document {

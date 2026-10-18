@@ -4,7 +4,7 @@ import { SIGN_IN_PATH } from "@/lib/auth/routes";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { SignUpForm } from "@/components/auth/SignUpForm";
 
-export const metadata: Metadata = { title: "Create an account · Polaris" };
+export const metadata: Metadata = { title: "Create an account" };
 
 export default function SignUpPage() {
   return (

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SuggestionPanel, aiStatusLine, type AiPanelState } from "@/components/SuggestionPanel";
+import type { Suggestion } from "@/lib/editor/suggestions";
 
 afterEach(cleanup);
 
@@ -71,5 +72,60 @@ describe("aiStatusLine", () => {
     expect(aiStatusLine({ kind: "error", reason: "rate_limited", until }, evening)).toBe(
       `AI suggestions paused until tomorrow at ${timeOf(until)} (usage limit reached).`,
     );
+  });
+});
+
+describe("the open suggestion's card", () => {
+  const suggestion = (key: string, category: Suggestion["category"], text: string): Suggestion => ({
+    key,
+    ruleId: "test",
+    category,
+    message: `${category} message`,
+    explanation: "Why it matters.",
+    replacements: [],
+    start: 0,
+    end: text.length,
+    source: "rules",
+    from: 1,
+    to: 1 + text.length,
+    blockText: text,
+    blockFrom: 1,
+  });
+  const list = [suggestion("f", "formality", "don't"), suggestion("c", "clarity", "this")];
+  const panelWith = (activeKey: string | null) => (
+    <SuggestionPanel
+      suggestions={list}
+      activeKey={activeKey}
+      ai={{ kind: "off" }}
+      onActivate={() => {}}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  );
+  const cards = () => screen.queryAllByTestId("suggestion-card");
+  const filter = (name: RegExp) =>
+    within(screen.getByRole("group", { name: "Filter by category" })).getByRole("button", {
+      name,
+    });
+
+  it("shows when it is opened from the text (Alt+], a click), even if the filter hid it", () => {
+    const { rerender } = render(panelWith(null));
+    fireEvent.click(filter(/^Clarity/));
+    expect(cards().map((c) => c.getAttribute("data-suggestion-key"))).toEqual(["c"]);
+    rerender(panelWith("f"));
+    expect(filter(/^All/).getAttribute("aria-pressed")).toBe("true");
+    const open = cards().find((c) => c.getAttribute("data-suggestion-key") === "f")!;
+    expect(open.querySelector("[aria-expanded=true]")).not.toBeNull();
+  });
+
+  it("keeps the writer's filter when the open card is in it, or when they pick one", () => {
+    const { rerender } = render(panelWith(null));
+    fireEvent.click(filter(/^Clarity/));
+    rerender(panelWith("c"));
+    expect(filter(/^Clarity/).getAttribute("aria-pressed")).toBe("true");
+    // With a card open, choosing another filter is still the writer's choice.
+    fireEvent.click(filter(/^Formality/));
+    expect(filter(/^Formality/).getAttribute("aria-pressed")).toBe("true");
+    expect(cards().map((c) => c.getAttribute("data-suggestion-key"))).toEqual(["f"]);
   });
 });
