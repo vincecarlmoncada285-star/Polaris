@@ -78,7 +78,10 @@ Polaris uses two layers:
 
 1. **Rules (built).** Fast, deterministic checks in `src/lib/rules/` run on each paragraph
    as you type. Results are cached by paragraph text, so only the paragraph you are editing
-   is rechecked.
+   is rechecked. Code (code blocks and `inline code`) is not prose: neither layer flags
+   anything in it, and the Overview counts its words but not its sentences. **Dismiss** hides
+   that one suggestion, where it is: it stays hidden as you edit around it, and the same words
+   elsewhere are still flagged.
 2. **AI (built, opt-in).** Per-paragraph suggestions from Claude for what rules can't catch:
    hedging and overclaiming, unsupported claims, vague referents ("this", "it"), weak logical
    connections, awkward or ambiguous sentences, register slips and tense inconsistency. They
@@ -116,10 +119,11 @@ Polaris uses two layers:
      (`POLARIS_AI_DAILY_PARAGRAPHS`), so many accounts together cannot run up an unbounded bill
      on the server's key; a request one writer's own limits refused does not count towards it.
    - **Caching.** The server keeps answers in memory for 24 hours (up to 2,000), keyed by a
-     SHA-256 hash of the model, effort, prompt version, goals, title, previous paragraph and
-     paragraph text; the browser keeps the session's answers by goals and text, so undoing
-     back to text that was already checked costs nothing. The system prompt is marked for
-     Anthropic's prompt caching.
+     SHA-256 hash of the writer's account, model, effort, prompt version, goals, title,
+     previous paragraph and paragraph text (one writer is never served another's answer, which
+     would show that someone else sent the same paragraph); the browser keeps the session's
+     answers by goals and text, so undoing back to text that was already checked costs
+     nothing. The system prompt is marked for Anthropic's prompt caching.
 
    | Variable                      | Default           | What it does                                     |
    | ----------------------------- | ----------------- | ------------------------------------------------ |
@@ -294,16 +298,18 @@ it is dropped (the point it belongs to is kept). Nothing is ever applied to your
 is saved, through the same API as any other document. A file that cannot be read shows an error
 and creates nothing.
 
-| Format                    | Kept                                                                                                                                                                               | Left out (and counted)                                                                    |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Word (.docx)              | Title, headings 1–3 (4–6 become 3), paragraphs, bold, italic, underline, strikethrough, bulleted and numbered lists (nested), quotes, links, footnotes and endnotes (as footnotes) | Images, tables, comments, deleted text from tracked changes (insertions are kept as text) |
-| Markdown (.md, .markdown) | GitHub-flavoured Markdown: headings, emphasis, strikethrough, code, lists (nested), quotes, links, `[^1]` footnotes with their `[^1]: …` definitions                               | Images and tables. Raw HTML is not trusted: it is kept as visible text, never as markup.  |
-| Plain text (.txt)         | Paragraphs (separated by blank lines; single line breaks inside one are soft wrapping); a file with no blank lines gets one paragraph per line                                     |                                                                                           |
+| Format                    | Kept                                                                                                                                                                                                          | Left out (and counted)                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Word (.docx)              | Title, headings 1–3 (4–6 become 3), paragraphs, bold, italic, underline, strikethrough, superscript and subscript, bulleted and numbered lists (nested), quotes, links, footnotes and endnotes (as footnotes) | Images, tables, equations, comments, deleted text from tracked changes (insertions are kept as text) |
+| Markdown (.md, .markdown) | GitHub-flavoured Markdown: headings, emphasis, strikethrough, code, lists (nested), quotes, links, `[^1]` footnotes with their `[^1]: …` definitions                                                          | Images and tables. Raw HTML is not trusted: it is kept as visible text, never as markup.             |
+| Plain text (.txt)         | Paragraphs (separated by blank lines; single line breaks inside one are soft wrapping); a file with no blank lines gets one paragraph per line                                                                |                                                                                                      |
 
-The title comes from Word's Title style or the first level-1 heading (taken out of the body),
-else from the file name. A title is plain text, so a footnote on it moves to a paragraph of its
-own at the start of the text. When something was left out (or a title's footnote moved), the
-new document says so once, for example "2 images and 1 table were left out." Every format is turned into HTML that is parsed
+The title comes from Word's Title style or a level-1 heading that starts the document (taken
+out of the body; one further in, a chapter say, stays where it is), else from the file name. A
+title is plain text, so a footnote on it moves to a paragraph of its own at the start of the
+text. A footnote longer than 2,000 characters is shortened. When something was left out,
+shortened or moved, the new document says so once, for example "2 images and 1 table were left
+out." Every format is turned into HTML that is parsed
 with `DOMParser` into a detached document (never inserted into the page), stripped of scripts,
 styles, frames, forms and every `on*` and `style` attribute, and then read with the editor's own
 schema, so anything the editor cannot show is dropped. Old Word files (.doc) are not supported:
@@ -314,12 +320,13 @@ save them as .docx first.
 **Export** in the editor's toolbar exports exactly what the editor shows, named after the title
 (`climate-essay.docx`; "untitled" without one):
 
-- **Word (.docx):** the title in Word's Title style, Heading 1–3, bold, italic and underlined text,
-  nested bulleted and numbered lists, quotes in an indented Quote style, line breaks, real
+- **Word (.docx):** the title in Word's Title style, Heading 1–3, bold, italic, underlined,
+  struck-through, superscript and subscript text, nested bulleted and numbered lists, quotes in an indented Quote style, line breaks, real
   hyperlinks and real Word footnotes, in 12 pt Times New Roman with 1.5 line spacing.
 - **Markdown (.md):** CommonMark with everything you typed escaped, nested lists, quotes, links,
   hard breaks, and footnotes as `[^1]` with their definitions at the end. Importing the file
-  again gives back the same text (underline aside: Markdown has none). Where Markdown could not
+  again gives back the same text (underline, superscript and subscript aside: Markdown has
+  none). Where Markdown could not
   read formatting back (bold that ends in punctuation right before a letter, as in `Note:` +
   `text`, or in Chinese and Japanese text), that formatting is left off and the text kept.
 - **Plain text (.txt):** paragraphs separated by blank lines, list markers kept, footnotes as

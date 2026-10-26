@@ -33,6 +33,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { keys: ["Mod-u"], action: "Underline", group: "Formatting" },
   { keys: ["Mod-Shift-s"], action: "Strikethrough", group: "Formatting" },
   { keys: ["Mod-e"], action: "Inline code", group: "Formatting" },
+  { keys: ["Mod-."], action: "Superscript", group: "Formatting" },
+  { keys: ["Mod-,"], action: "Subscript", group: "Formatting" },
 
   { keys: ["Mod-Alt-1"], action: "Heading 1", group: "Paragraphs" },
   { keys: ["Mod-Alt-2"], action: "Heading 2", group: "Paragraphs" },

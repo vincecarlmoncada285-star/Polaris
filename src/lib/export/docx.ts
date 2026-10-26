@@ -41,6 +41,15 @@ const NUMBER_FORMATS = [LevelFormat.DECIMAL, LevelFormat.LOWER_LETTER, LevelForm
 
 const levelIndent = (level: number) => ({ left: INDENT * (level + 1), hanging: 360 });
 
+/**
+ * Characters XML 1.0 cannot hold: C0 controls other than tab, line feed and carriage return,
+ * U+FFFE / U+FFFF and unpaired surrogates. Pasted text can carry them (a form feed from a PDF,
+ * a stray U+0001), and one in a .docx makes Word refuse to open the file.
+ */
+const XML_INVALID =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+export const xmlSafe = (text: string) => text.replace(XML_INVALID, "");
+
 const bulletLevels = Array.from({ length: 9 }, (_, level) => ({
   level,
   format: LevelFormat.BULLET,
@@ -84,11 +93,13 @@ function runs(nodes: DocNode[], ctx: Context): ParagraphChild[] {
     if (node.type === "text") {
       const code = hasMark(node, "code");
       run = new TextRun({
-        text: node.text ?? "",
+        text: xmlSafe(node.text ?? ""),
         bold: hasMark(node, "bold") || undefined,
         italics: hasMark(node, "italic") || undefined,
         underline: hasMark(node, "underline") ? {} : undefined,
         strike: hasMark(node, "strike") || undefined,
+        superScript: hasMark(node, "superscript") || undefined,
+        subScript: hasMark(node, "subscript") || undefined,
         font: code ? CODE_FONT : undefined,
         style: href ? "Hyperlink" : undefined,
       });
@@ -186,7 +197,8 @@ function block(node: DocNode, ctx: Context): Paragraph[] {
           ...placement(ctx),
           spacing: { line: 240 },
           children: lines.map(
-            (line, i) => new TextRun({ text: line, font: CODE_FONT, break: i > 0 ? 1 : undefined }),
+            (line, i) =>
+              new TextRun({ text: xmlSafe(line), font: CODE_FONT, break: i > 0 ? 1 : undefined }),
           ),
         }),
       ];
@@ -219,15 +231,13 @@ export function buildDocx(doc: DocNode, title = ""): Document {
     nextList: { n: 0 },
   };
   const body = blocks(childrenOf(doc), ctx);
-  const children = title.trim()
-    ? [
-        new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun(title.trim())] }),
-        ...body,
-      ]
+  const cleanTitle = xmlSafe(title).trim();
+  const children = cleanTitle
+    ? [new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun(cleanTitle)] }), ...body]
     : body;
   const heading = (size: number) => ({ run: { font: FONT, size, bold: true, color: "000000" } });
   return new Document({
-    title: title.trim() || undefined,
+    title: cleanTitle || undefined,
     creator: "Polaris",
     styles: {
       default: {
@@ -264,7 +274,7 @@ export function buildDocx(doc: DocNode, title = ""): Document {
     footnotes: Object.fromEntries(
       ctx.notes.notes.map((text, i) => [
         i + 1,
-        { children: [new Paragraph({ children: [new TextRun(text)] })] },
+        { children: [new Paragraph({ children: [new TextRun(xmlSafe(text))] })] },
       ]),
     ),
     sections: [{ children }],

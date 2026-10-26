@@ -297,6 +297,14 @@ describe("POST /api/ai/paragraph: answers", () => {
     expect(second.suggestions).toEqual(first.suggestions);
   });
 
+  it("never serves one writer an answer cached for another", async () => {
+    await POST(request(body()));
+    vi.mocked(requireUser).mockResolvedValue("someone-else");
+    const other = (await (await POST(request(body()))).json()) as ParagraphResponse;
+    expect(other.cached).toBe(false);
+    expect(parse).toHaveBeenCalledTimes(2);
+  });
+
   it("misses the cache when the goals or the text differ", async () => {
     await POST(request(body()));
     await POST(request(body({ goals: { citationStyle: "mla" } })));

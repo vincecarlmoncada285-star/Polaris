@@ -32,6 +32,7 @@ import {
   applySuggestion,
   dismissSuggestion,
   recheckSuggestions,
+  CODE_BLOCK_NODE,
   setExternalMatches,
   type Suggestion,
 } from "@/lib/editor/suggestions";
@@ -106,9 +107,14 @@ interface AiAvailability {
   configured: boolean;
 }
 
-/** What Claude is sent of each paragraph: its text without footnote markers. */
+/**
+ * What Claude is sent of each paragraph: its text without footnote markers. A code block is
+ * not prose, so it counts as empty (nothing is sent, and it is no paragraph's context).
+ */
 const paragraphTexts = (editor: Editor) =>
-  collectTextBlocks(editor.state.doc).map((b) => withoutFootnotes(b).text);
+  collectTextBlocks(editor.state.doc).map((b) =>
+    editor.state.doc.nodeAt(b.pos)?.type.name === CODE_BLOCK_NODE ? "" : withoutFootnotes(b).text,
+  );
 
 /** The footnotes for the list under the article (no positions: they change on every edit). */
 const footnoteEntries = (editor: Editor): FootnoteEntry[] =>

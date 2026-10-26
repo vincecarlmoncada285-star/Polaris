@@ -1,4 +1,5 @@
 // What an import left out, and how the editor tells the writer once the document opens.
+import { FOOTNOTE_MAX_CHARS } from "@/lib/editor/textblocks";
 import { formatNumber } from "@/lib/text/format";
 
 /** Content an import could not keep, by kind. */
@@ -10,6 +11,8 @@ export interface DroppedCounts {
   trackedChanges: number;
   /** Embedded media and frames (video, audio, iframes, objects, drawings). */
   embedded: number;
+  /** Word equations (Office Math): the editor has no way to show them. */
+  equations: number;
 }
 
 export const noneDropped = (): DroppedCounts => ({
@@ -18,6 +21,7 @@ export const noneDropped = (): DroppedCounts => ({
   comments: 0,
   trackedChanges: 0,
   embedded: 0,
+  equations: 0,
 });
 
 const NAMES: { key: keyof DroppedCounts; one: string; many: string }[] = [
@@ -26,6 +30,7 @@ const NAMES: { key: keyof DroppedCounts; one: string; many: string }[] = [
   { key: "comments", one: "comment", many: "comments" },
   { key: "trackedChanges", one: "tracked deletion", many: "tracked deletions" },
   { key: "embedded", one: "embedded object", many: "embedded objects" },
+  { key: "equations", one: "equation", many: "equations" },
 ];
 
 /** "2 images and 1 table were left out.", or null when nothing was. */
@@ -48,12 +53,27 @@ export function titleFootnotesSummary(count: number): string | null {
     : `The title’s ${formatNumber(count)} footnotes are now at the start of the text.`;
 }
 
+/** Footnotes cut to the longest a footnote can be, or null when none was. */
+export function shortenedFootnotesSummary(count: number): string | null {
+  if (count <= 0) return null;
+  const limit = formatNumber(FOOTNOTE_MAX_CHARS);
+  return count === 1
+    ? `1 footnote was longer than ${limit} characters and was shortened.`
+    : `${formatNumber(count)} footnotes were longer than ${limit} characters and were shortened.`;
+}
+
 /** What the new document says once it opens: where it came from, and what changed on the way. */
-export function importNotice(fileName: string, dropped: DroppedCounts, titleFootnotes: number) {
+export function importNotice(
+  fileName: string,
+  dropped: DroppedCounts,
+  titleFootnotes: number,
+  shortenedFootnotes = 0,
+) {
   return [
     `Imported from ${fileName}.`,
     droppedSummary(dropped),
     titleFootnotesSummary(titleFootnotes),
+    shortenedFootnotesSummary(shortenedFootnotes),
   ]
     .filter(Boolean)
     .join(" ");

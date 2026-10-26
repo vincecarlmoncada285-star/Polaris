@@ -32,6 +32,20 @@ const ITEMS: (Item | "sep")[] = [
     isActive: (e) => e.isActive("underline"),
     run: (e) => e.chain().focus().toggleUnderline().run(),
   },
+  {
+    label: "Superscript",
+    shortcut: "Ctrl+.",
+    icon: "x²",
+    isActive: (e) => e.isActive("superscript"),
+    run: (e) => e.chain().focus().toggleSuperscript().run(),
+  },
+  {
+    label: "Subscript",
+    shortcut: "Ctrl+,",
+    icon: "x₂",
+    isActive: (e) => e.isActive("subscript"),
+    run: (e) => e.chain().focus().toggleSubscript().run(),
+  },
   "sep",
   {
     label: "Heading 1",
@@ -91,7 +105,7 @@ export function Toolbar({
   });
   const inLink = useEditorState({ editor, selector: ({ editor: e }) => e.isActive("link") });
   const dialogButton = (on: boolean) =>
-    `rounded px-2 py-1 text-sm font-medium ${
+    `rounded px-1.5 py-1 text-sm font-medium ${
       on ? "bg-accent-soft text-accent" : "text-muted hover:bg-background hover:text-foreground"
     }`;
   return (
@@ -102,7 +116,7 @@ export function Toolbar({
     >
       {ITEMS.map((item, i) =>
         item === "sep" ? (
-          <span key={i} aria-hidden className="mx-1 h-5 w-px bg-border" />
+          <span key={i} aria-hidden className="mx-0.5 h-5 w-px bg-border" />
         ) : (
           <button
             key={item.label}
@@ -111,7 +125,7 @@ export function Toolbar({
             aria-label={item.label}
             aria-pressed={active[i]}
             onClick={() => item.run(editor)}
-            className={`min-w-8 rounded px-2 py-1 text-sm font-medium ${
+            className={`min-w-7 rounded px-1.5 py-1 text-sm font-medium ${
               active[i]
                 ? "bg-accent-soft text-accent"
                 : "text-muted hover:bg-background hover:text-foreground"
@@ -121,7 +135,7 @@ export function Toolbar({
           </button>
         ),
       )}
-      <span aria-hidden className="mx-1 h-5 w-px bg-border" />
+      <span aria-hidden className="mx-0.5 h-5 w-px bg-border" />
       {/* These open dialogs rather than toggling, so they are not pressed buttons. */}
       <button
         type="button"

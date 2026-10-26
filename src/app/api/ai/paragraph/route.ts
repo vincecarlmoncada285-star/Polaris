@@ -80,6 +80,7 @@ export async function POST(req: Request) {
   const model = aiModel();
   const effort = paragraphEffort();
   const key = feedbackCacheKey({
+    userId,
     model,
     effort,
     promptVersion: PROMPT_VERSION,

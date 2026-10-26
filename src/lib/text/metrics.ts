@@ -10,6 +10,8 @@ export interface MetricsBlock {
   text: string;
   /** Headings count towards the word count, but are not sentences: no readability, no openers. */
   heading?: boolean;
+  /** Code blocks likewise: they count as words, but are not prose. */
+  code?: boolean;
 }
 
 /** Where a sentence is: block index, then [start, end) offsets in that block's text. */
@@ -24,10 +26,10 @@ export interface SentenceLocation {
 export interface WritingMetrics {
   /** Every word, headings included: the same count as the editor's footer. */
   words: number;
-  /** Words in sentences (headings left out). The readability formulas use these. */
+  /** Words in sentences (headings and code left out). The readability formulas use these. */
   proseWords: number;
   sentences: number;
-  /** Non-empty blocks that are not headings. */
+  /** Non-empty blocks that are not headings or code. */
   paragraphs: number;
   syllables: number;
   /** Words per sentence; null with no sentences. */
@@ -150,7 +152,7 @@ export function computeMetrics(input: string | readonly MetricsBlock[]): Writing
     const text = block.text.replaceAll(OBJECT_REPLACEMENT, "\n");
     const blockWords = text.match(WORD)?.length ?? 0;
     words += blockWords;
-    if (block.heading || blockWords === 0) continue;
+    if (block.heading || block.code || blockWords === 0) continue;
     paragraphs++;
     const passiveStarts = passiveVoice.check(text, {}).map((m) => m.start);
     for (const s of splitSentences(text)) {

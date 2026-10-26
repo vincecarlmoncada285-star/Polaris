@@ -94,6 +94,7 @@ describe("the open suggestion's card", () => {
     from: 1,
     to: 1 + text.length,
     blockText: text,
+    flagged: text,
     blockFrom: 1,
   });
   const list = [suggestion("f", "formality", "don't"), suggestion("c", "clarity", "this")];

@@ -73,11 +73,11 @@ describe("external (AI) matches in the editor", () => {
     editor.destroy();
   });
 
-  it("shows the same result on two paragraphs with identical text", () => {
+  it("shows the same result on two paragraphs with identical text, each with its own key", () => {
     const { editor, ai } = makeEditor(`<p>${P}</p><p>${P}</p>`);
     setExternalMatches(editor.view, new Map([[P, [aiMatch(P, "prove")]]]));
     expect(ai()).toHaveLength(2);
-    expect(new Set(ai().map((s) => s.key)).size).toBe(1);
+    expect(new Set(ai().map((s) => s.key)).size).toBe(2);
     editor.destroy();
   });
 

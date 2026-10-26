@@ -100,6 +100,21 @@ describe("repeated words", () => {
     expect(flagged(repeatedWords, "the the study")).toEqual([{ text: "the the", fix: ["the"] }]);
     expect(flagged(repeatedWords, "She had had enough; he said that that was fine.")).toEqual([]);
   });
+
+  it("does not take part of a hyphenated or longer word for a repeat", () => {
+    expect(flagged(repeatedWords, "We met in in-person sessions.")).toEqual([]);
+    expect(flagged(repeatedWords, "After the check-in in May, the drop-in in June.")).toEqual([]);
+    expect(flagged(repeatedWords, "the theory and an analysis")).toEqual([]);
+    expect(flagged(repeatedWords, "Größe ße")).toEqual([]);
+    expect(flagged(repeatedWords, "the student's s s")).toEqual([{ text: "s s", fix: ["s"] }]);
+  });
+
+  it("finds repeats of words with accents, in any case", () => {
+    expect(flagged(repeatedWords, "C'est très très bien.")).toEqual([
+      { text: "très très", fix: ["très"] },
+    ]);
+    expect(flagged(repeatedWords, "The the study")).toEqual([{ text: "The the", fix: ["The"] }]);
+  });
 });
 
 describe("citation format", () => {

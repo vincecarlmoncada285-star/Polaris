@@ -2,7 +2,6 @@
 // "browser" field swaps in the parts that read files). Loaded only when a .docx is imported.
 import JSZip from "jszip";
 import mammoth from "mammoth";
-import { cleanFootnoteContent } from "@/lib/editor/footnote";
 import { htmlToDocument, type ImportedDocument } from "./html";
 
 /** Thrown for a file that is not a Word document we can read. */
@@ -41,7 +40,8 @@ export function prepareDocxHtml(doc: Document): Element | null {
     // word of one paragraph does not run into the first of the next.
     for (const br of copy.querySelectorAll("br")) br.replaceWith(" ");
     for (const block of copy.querySelectorAll(NOTE_BLOCKS)) block.append(" ");
-    notes.set(li.id, cleanFootnoteContent(copy.textContent ?? ""));
+    // Whole: the clean-up cuts a note that is too long, and counts it for the notice.
+    notes.set(li.id, (copy.textContent ?? "").replace(/\s+/g, " ").trim());
     const list = li.parentElement;
     li.remove();
     if (list && !list.querySelector("li")) list.remove();
@@ -56,8 +56,13 @@ export function prepareDocxHtml(doc: Document): Element | null {
   return doc.querySelector(`h1.${TITLE_CLASS}`);
 }
 
-/** What mammoth leaves out without saying: Word comments, and deleted text from tracked changes. */
-async function countLeftOut(zip: JSZip): Promise<{ comments: number; trackedChanges: number }> {
+/**
+ * What mammoth leaves out without saying: Word comments, deleted text from tracked changes, and
+ * equations (Office Math, which it skips along with the text in them).
+ */
+async function countLeftOut(
+  zip: JSZip,
+): Promise<{ comments: number; trackedChanges: number; equations: number }> {
   const [comments, body] = await Promise.all([
     zip.file("word/comments.xml")?.async("string") ?? Promise.resolve(""),
     zip.file("word/document.xml")!.async("string"),
@@ -65,6 +70,8 @@ async function countLeftOut(zip: JSZip): Promise<{ comments: number; trackedChan
   return {
     comments: comments.match(/<w:comment\b/g)?.length ?? 0,
     trackedChanges: body.match(/<w:(?:del|moveFrom)\b/g)?.length ?? 0,
+    // Each equation is an <m:oMath>; a displayed one also sits in an <m:oMathPara>.
+    equations: body.match(/<m:oMath\b/g)?.length ?? 0,
   };
 }
 

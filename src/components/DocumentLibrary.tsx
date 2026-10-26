@@ -112,7 +112,15 @@ export function DocumentLibrary({
       });
       if (!res.ok) throw new ImportError(res.status === 400 ? IMPORT_TOO_BIG : IMPORT_FAILED);
       const doc = (await res.json()) as { id: string };
-      saveImportNotice(doc.id, importNotice(file.name, imported.dropped, imported.titleFootnotes));
+      saveImportNotice(
+        doc.id,
+        importNotice(
+          file.name,
+          imported.dropped,
+          imported.titleFootnotes,
+          imported.shortenedFootnotes,
+        ),
+      );
       router.push(`/documents/${doc.id}`);
     } catch (e) {
       setError(e instanceof ImportError ? e.message : IMPORT_FAILED);

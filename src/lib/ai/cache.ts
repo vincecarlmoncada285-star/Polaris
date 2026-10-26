@@ -60,6 +60,11 @@ function stableJson(value: unknown): string {
 }
 
 export interface FeedbackKeyInput {
+  /**
+   * Whose request it is. Answers are not shared between writers: a hit would tell one writer
+   * that someone else sent the very same paragraph.
+   */
+  userId: string;
   model: string;
   effort: string;
   promptVersion: string;
@@ -73,6 +78,7 @@ export interface FeedbackKeyInput {
 /** sha256 over everything that shapes the answer. The paragraph text never appears in a key. */
 export function feedbackCacheKey(input: FeedbackKeyInput): string {
   const parts = [
+    input.userId,
     input.model,
     input.effort,
     input.promptVersion,

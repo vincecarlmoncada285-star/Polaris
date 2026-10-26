@@ -11,7 +11,7 @@ export interface DocRange {
   to: number;
 }
 
-const isHeading = (doc: PMNode, block: TextBlock) => doc.nodeAt(block.pos)?.type.name === "heading";
+const typeOf = (doc: PMNode, block: TextBlock) => doc.nodeAt(block.pos)?.type.name;
 
 /**
  * The writer's prose: footnote markers take no character (their text is not part of it), so the
@@ -19,9 +19,12 @@ const isHeading = (doc: PMNode, block: TextBlock) => doc.nodeAt(block.pos)?.type
  */
 const proseBlocks = (doc: PMNode) => collectTextBlocks(doc, { footnotes: "omit" });
 
-/** The document's textblocks for computeMetrics(), headings marked, footnotes left out. */
+/** The document's textblocks for computeMetrics(), headings and code marked, footnotes left out. */
 export function metricsBlocks(doc: PMNode): MetricsBlock[] {
-  return proseBlocks(doc).map((b) => ({ text: b.text, heading: isHeading(doc, b) }));
+  return proseBlocks(doc).map((b) => {
+    const type = typeOf(doc, b);
+    return { text: b.text, heading: type === "heading", code: type === "codeBlock" };
+  });
 }
 
 /**
@@ -89,7 +92,12 @@ export function findSentence(doc: PMNode, sentence: SentenceLocation): DocRange 
 export function findParagraph(doc: PMNode, n: number): DocRange | null {
   let count = 0;
   for (const block of proseBlocks(doc)) {
-    if (!isNumberedParagraph({ text: block.text, heading: isHeading(doc, block) ? 1 : null })) {
+    if (
+      !isNumberedParagraph({
+        text: block.text,
+        heading: typeOf(doc, block) === "heading" ? 1 : null,
+      })
+    ) {
       continue;
     }
     if (++count === n) {

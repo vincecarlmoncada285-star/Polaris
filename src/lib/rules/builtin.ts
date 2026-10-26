@@ -259,13 +259,20 @@ export const longSentences: Rule = {
   },
 };
 
+/**
+ * A word, whitespace, the same word. The edges are Unicode-aware (\b is not, so it missed
+ * "très très"), and a word joined to the next by a hyphen or apostrophe is part of a longer
+ * one, so "in in-person" and "a check-in in May" are not doubled words.
+ */
+const DOUBLED_WORD = /(?<![\p{L}\p{M}\p{N}'’-])([\p{L}\p{M}]+)(\s+)\1(?![\p{L}\p{M}\p{N}'’-])/giu;
+
 export const repeatedWords: Rule = {
   id: "repeated-word",
   category: "correctness",
   check(text) {
     const out: RuleMatch[] = [];
     // "had had" and "that that" can be grammatical, so leave them alone.
-    for (const m of text.matchAll(/\b([\p{L}]+)(\s+)\1\b/giu)) {
+    for (const m of text.matchAll(DOUBLED_WORD)) {
       const word = m[1]!.toLowerCase();
       if (word === "had" || word === "that") continue;
       out.push({

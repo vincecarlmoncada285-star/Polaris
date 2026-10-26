@@ -28,13 +28,15 @@ const between = (e: Editor, r: { from: number; to: number } | null) =>
   r ? e.state.doc.textBetween(r.from, r.to, "\n\n") : null;
 
 describe("metricsBlocks", () => {
-  it("marks headings so the Overview leaves them out of sentence counts", () => {
-    const e = make("<h2>Intro</h2><p>One. Two.</p>");
+  it("marks headings and code so the Overview leaves them out of sentence counts", () => {
+    const e = make("<h2>Intro</h2><p>One. Two.</p><pre><code>x = 1.</code></pre>");
     expect(metricsBlocks(e.state.doc)).toEqual([
-      { text: "Intro", heading: true },
-      { text: "One. Two.", heading: false },
+      { text: "Intro", heading: true, code: false },
+      { text: "One. Two.", heading: false, code: false },
+      { text: "x = 1.", heading: false, code: true },
     ]);
-    expect(computeMetrics(metricsBlocks(e.state.doc))).toMatchObject({ words: 3, sentences: 2 });
+    // The code counts as words ("x", "1"), not as sentences.
+    expect(computeMetrics(metricsBlocks(e.state.doc))).toMatchObject({ words: 5, sentences: 2 });
   });
 });
 

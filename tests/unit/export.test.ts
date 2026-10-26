@@ -82,6 +82,34 @@ async function unzipDocx(content: JSONContent, title: string) {
 }
 
 describe("Word export (docx)", () => {
+  it("writes superscript and subscript as Word's raised and lowered text", async () => {
+    const { document } = await unzipDocx(
+      doc(p(t("10"), t("-3", "superscript"), t(" M of CO"), t("2", "subscript"))),
+      "",
+    );
+    expect(document).toMatch(/<w:vertAlign w:val="superscript"\/>(?:(?!<\/w:r>).)*>-3</);
+    expect(document).toMatch(/<w:vertAlign w:val="subscript"\/>(?:(?!<\/w:r>).)*>2</);
+  });
+
+  it("leaves out characters XML cannot hold, so Word can open the file", async () => {
+    const bad = "a\u0001b\u000Cc\uD800d\uFFFF";
+    const content = doc(p(t(`Pasted ${bad} text 😀`), fn(`Note ${bad}`)), {
+      type: "codeBlock",
+      content: [t(`code ${bad}`)],
+    });
+    const { document, footnotes } = await unzipDocx(content, `Title ${bad}`);
+    for (const xml of [document, footnotes]) {
+      const parsed = new DOMParser().parseFromString(xml, "application/xml");
+      expect(parsed.querySelector("parsererror")).toBeNull();
+      expect(xml).not.toMatch(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFF]/);
+    }
+    expect(document).toContain("Pasted abcd text 😀");
+    expect(document).toContain("code abcd");
+    expect(document).toContain("Title abcd");
+    // A footnote is one line: the form feed counts as a space there.
+    expect(footnotes).toContain("Note ab cd");
+  });
+
   it("writes the title, heading styles, formatted runs, lists, quotes and breaks", async () => {
     const { document, styles, numbering } = await unzipDocx(SAMPLE, "Climate essay");
     expect(document).toMatch(inOneParagraph('<w:pStyle w:val="Title"/>', "Climate essay"));

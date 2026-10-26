@@ -3,6 +3,8 @@
 // list. The editor adds its UI-only extensions (placeholder, suggestions) on top.
 import { Extension, mergeAttributes, type AnyExtension } from "@tiptap/core";
 import { Link } from "@tiptap/extension-link";
+import { Subscript } from "@tiptap/extension-subscript";
+import { Superscript } from "@tiptap/extension-superscript";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { Footnote, type FootnoteTarget } from "./footnote";
@@ -121,6 +123,22 @@ const LinkBehaviour = Extension.create<LinkBehaviourOptions>({
   },
 });
 
+/**
+ * Superscript and subscript (10⁻³, CO₂, the 2nd), which cannot both apply to the same text. A
+ * footnote marker is a <sup data-footnote> too, and that is the footnote node, never this mark:
+ * marks' parse rules are tried before nodes', so the mark has to let it pass.
+ */
+const PolarisSuperscript = Superscript.extend({
+  excludes: "subscript",
+  parseHTML() {
+    return [
+      { tag: "sup", getAttrs: (el) => (el.hasAttribute("data-footnote") ? false : null) },
+      { style: "vertical-align", getAttrs: (value) => (value === "super" ? null : false) },
+    ];
+  },
+});
+const PolarisSubscript = Subscript.extend({ excludes: "superscript" });
+
 /** The extensions that define a Polaris document, configured as the editor uses them. */
 export function documentExtensions(options: DocumentExtensionOptions = {}): AnyExtension[] {
   return [
@@ -136,6 +154,8 @@ export function documentExtensions(options: DocumentExtensionOptions = {}): AnyE
       shouldAutoLink: (url) => isAllowedLinkUri(url) && tiptapShouldAutoLink(url),
       HTMLAttributes: LINK_ATTRIBUTES,
     }),
+    PolarisSuperscript,
+    PolarisSubscript,
     Footnote.configure({ onEdit: options.onEditFootnote ?? null }),
     LinkBehaviour.configure({ onShortcut: options.onLinkShortcut ?? null }),
   ];

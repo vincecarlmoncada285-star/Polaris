@@ -6,10 +6,14 @@ import { escapeHtml, htmlToDocument, type ImportedDocument } from "./html";
 
 const DEFINITION = /^ {0,3}\[\^([^\]\s]+)\]:[ \t]?(.*)$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+/** A line that starts a block of its own, so it cannot continue a definition's paragraph. */
+const BLOCK_START = /^ {0,3}(?:[#>|]|[-*+][ \t]|\d{1,9}[.)][ \t]|(?:[-*_][ \t]*){3,}$|`{3,}|~{3,})/;
 
 /**
- * Takes footnote definitions out of the Markdown (outside code fences), with their indented
- * continuation lines. Returns the rest of the source and the definitions by label.
+ * Takes footnote definitions out of the Markdown (outside code fences), with their continuation
+ * lines: indented ones, and, as for any Markdown paragraph, unindented ones that follow
+ * directly (a definition hard-wrapped by an editor). Returns the rest of the source and the
+ * definitions by label.
  */
 export function extractFootnoteDefinitions(source: string): {
   body: string;
@@ -40,10 +44,12 @@ export function extractFootnoteDefinitions(source: string): {
       continue;
     }
     const parts = [def[2]!];
-    // Continuation: indented lines, possibly after blank lines.
+    // Continuation: indented lines, possibly after blank lines, and lazy ones (any line that
+    // follows without a blank line and does not start a block or another definition).
     while (i + 1 < lines.length) {
       const next = lines[i + 1]!;
-      if (/^( {4}|\t)/.test(next)) {
+      const lazy = next.trim() !== "" && !BLOCK_START.test(next) && !DEFINITION.test(next);
+      if (/^( {4}|\t)/.test(next) || lazy) {
         parts.push(next.trim());
         i++;
       } else if (next.trim() === "" && /^( {4}|\t)\S/.test(lines[i + 2] ?? "")) {

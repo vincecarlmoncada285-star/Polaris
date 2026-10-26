@@ -11,6 +11,8 @@ import {
   FootnoteReferenceRun,
   HeadingLevel,
   ImageRun,
+  Math as OfficeMath,
+  MathRun,
   Packer,
   Paragraph,
   Table,
@@ -31,6 +33,7 @@ import {
 } from "@/lib/import";
 import { extractFootnoteDefinitions, markdownToDocument } from "@/lib/import/markdown";
 import { droppedSummary, importNotice, noneDropped } from "@/lib/import/notice";
+import { FOOTNOTE_MAX_CHARS } from "@/lib/editor/textblocks";
 import { textToDocument, textToParagraphs } from "@/lib/import/text";
 
 /** Every node of a type, depth first. */
@@ -155,8 +158,8 @@ describe("sanitizeImportedDom", () => {
     expect(document.body.innerHTML).toBe(before);
   });
 
-  it("takes the title from the first H1 (out of the body), else from the file name", () => {
-    const a = htmlToDocument("<p>Intro</p><h1>Main</h1><h1>Second</h1><p>Body</p>", {
+  it("takes the title from an H1 that starts the text (out of the body), else the file name", () => {
+    const a = htmlToDocument("<p> </p><h1>Main</h1><h1>Second</h1><p>Body</p>", {
       fileName: "a.md",
     });
     expect(a.title).toBe("Main");
@@ -164,6 +167,15 @@ describe("sanitizeImportedDom", () => {
     const b = htmlToDocument("<h2>Only a section</h2><p>Body</p>", { fileName: "My notes.v2.md" });
     expect(b.title).toBe("My notes.v2");
     expect(nodes(b.content, "heading").map(textOf)).toEqual(["Only a section"]);
+  });
+
+  it("leaves an H1 further in where it is: it is a chapter, not the title", () => {
+    const doc = htmlToDocument("<p>Intro</p><h1>Chapter 1</h1><p>Body</p>", {
+      fileName: "Thesis.docx",
+    });
+    expect(doc.title).toBe("Thesis");
+    expect(nodes(doc.content, "heading").map(textOf)).toEqual(["Chapter 1"]);
+    expect(doc.plainText).toBe("Intro\n\nChapter 1\n\nBody");
   });
 
   it("keeps a footnote on the title, in a paragraph of its own at the start of the text", () => {
@@ -199,6 +211,12 @@ describe("droppedSummary", () => {
     expect(importNotice("a.docx", { ...noneDropped(), images: 1 }, 1)).toBe(
       "Imported from a.docx. 1 image was left out. The title’s footnote is now at the start of the text.",
     );
+    expect(importNotice("a.md", noneDropped(), 0, 2)).toBe(
+      "Imported from a.md. 2 footnotes were longer than 2,000 characters and were shortened.",
+    );
+    expect(importNotice("a.docx", { ...noneDropped(), equations: 3 }, 0)).toBe(
+      "Imported from a.docx. 3 equations were left out.",
+    );
     expect(importNotice("a.md", noneDropped(), 2)).toBe(
       "Imported from a.md. The title’s 2 footnotes are now at the start of the text.",
     );
@@ -221,6 +239,42 @@ async function docxFixture(children: Paragraph[] | (Paragraph | Table)[], extra:
     buffer.byteOffset + buffer.byteLength,
   ) as ArrayBuffer;
 }
+
+describe("superscript and subscript", () => {
+  it("are kept as marks, and a footnote marker stays a footnote", () => {
+    const doc = htmlToDocument(
+      '<p>10<sup>-3</sup> M of CO<sub>2</sub>.<sup data-footnote data-content="Source."></sup></p>',
+      { fileName: "a.md" },
+    );
+    expect(marksOn(doc.content, "-3")).toEqual(["superscript"]);
+    expect(marksOn(doc.content, "2")).toEqual(["subscript"]);
+    expect(footnotes(doc.content)).toEqual(["Source."]);
+    expect(doc.plainText).toBe("10-3 M of CO2.");
+  });
+
+  it("come through from Word", async () => {
+    const data = await docxFixture([
+      new Paragraph({
+        children: [
+          new TextRun("x"),
+          new TextRun({ text: "2", superScript: true }),
+          new TextRun(" and H"),
+          new TextRun({ text: "2", subScript: true }),
+          new TextRun("O"),
+        ],
+      }),
+    ]);
+    const result = await docxToDocument(data, "chem.docx");
+    const marks = nodes(result.content, "text").map((t) => [t.text, t.marks?.[0]?.type]);
+    expect(marks).toEqual([
+      ["x", undefined],
+      ["2", "superscript"],
+      [" and H", undefined],
+      ["2", "subscript"],
+      ["O", undefined],
+    ]);
+  });
+});
 
 describe("docx import (mammoth)", () => {
   it("keeps the title, headings, lists, emphasis, links and footnotes; drops images and tables", async () => {
@@ -390,6 +444,49 @@ describe("docx import (mammoth)", () => {
     ]);
   });
 
+  it("counts equations, which it cannot keep, and cuts a footnote that is too long", async () => {
+    const data = await docxFixture(
+      [
+        new Paragraph({
+          children: [
+            new TextRun("Where "),
+            new OfficeMath({ children: [new MathRun("E=mc^2")] }),
+            new TextRun(" holds."),
+            new FootnoteReferenceRun(1),
+          ],
+        }),
+        new Paragraph({ children: [new OfficeMath({ children: [new MathRun("a+b")] })] }),
+      ],
+      { footnotes: { 1: { children: [new Paragraph("long ".repeat(500))] } } },
+    );
+    const result = await docxToDocument(data, "physics.docx");
+    expect(result.dropped.equations).toBe(2);
+    expect(result.plainText).toContain("Where holds.");
+    expect(result.shortenedFootnotes).toBe(1);
+    expect(String(footnotes(result.content)[0]).length).toBeLessThanOrEqual(FOOTNOTE_MAX_CHARS);
+  });
+
+  it("without a Title, takes a Heading 1 as the title only when it comes first", async () => {
+    const first = await docxToDocument(
+      await docxFixture([
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("My essay")] }),
+        new Paragraph("Body."),
+      ]),
+      "draft.docx",
+    );
+    expect(first.title).toBe("My essay");
+    const later = await docxToDocument(
+      await docxFixture([
+        new Paragraph("Name, course, date."),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("Chapter 1")] }),
+        new Paragraph("Body."),
+      ]),
+      "draft.docx",
+    );
+    expect(later.title).toBe("draft");
+    expect(nodes(later.content, "heading").map(textOf)).toEqual(["Chapter 1"]);
+  });
+
   it("refuses a file that is not a Word document", async () => {
     const garbage = new TextEncoder().encode("this is not a zip file").buffer as ArrayBuffer;
     await expect(docxToDocument(garbage, "x.docx")).rejects.toBeInstanceOf(DocxReadError);
@@ -477,6 +574,16 @@ Inline <b onclick="x()">raw</b> html and [^missing] reference.
     expect(doc.plainText).toContain("<img src=x onerror=");
   });
 
+  it("cuts a footnote that is too long, and counts it for the notice", () => {
+    const long = "word ".repeat(600);
+    const doc = markdownToDocument(`Text[^a] and[^b].\n\n[^a]: ${long}\n[^b]: Short.`, "a.md");
+    expect(doc.shortenedFootnotes).toBe(1);
+    const [cut, short] = footnotes(doc.content).map(String);
+    expect(cut!.length).toBeLessThanOrEqual(FOOTNOTE_MAX_CHARS);
+    expect(cut!.length).toBeGreaterThan(FOOTNOTE_MAX_CHARS - 5);
+    expect(short).toBe("Short.");
+  });
+
   it("collects definitions outside code fences only", () => {
     const { body, definitions } = extractFootnoteDefinitions(
       "Text[^a]\n\n~~~\n[^a]: in code\n~~~\n\n[^A]: Outside\n   [^b]: three spaces\n",
@@ -487,6 +594,29 @@ Inline <b onclick="x()">raw</b> html and [^missing] reference.
     ]);
     expect(body).toContain("[^a]: in code");
     expect(body).not.toContain("Outside");
+  });
+
+  it("keeps a hard-wrapped definition's lines together, up to a blank line or a new block", () => {
+    const { body, definitions } = extractFootnoteDefinitions(
+      [
+        "Text[^a][^b][^c].",
+        "",
+        "[^a]: A long note that an editor",
+        "wrapped onto a second line",
+        "and a third.",
+        "[^b]: Next definition.",
+        "[^c]: Before a list",
+        "- item",
+        "",
+        "After.",
+      ].join("\n"),
+    );
+    expect([...definitions]).toEqual([
+      ["a", "A long note that an editor wrapped onto a second line and a third."],
+      ["b", "Next definition."],
+      ["c", "Before a list"],
+    ]);
+    expect(body).toBe("Text[^a][^b][^c].\n\n- item\n\nAfter.");
   });
 });
 

@@ -19,6 +19,7 @@ const suggestion = (category: Category, key: string): Suggestion => ({
   from: 1,
   to: 2,
   blockText: "x",
+  flagged: "x",
   blockFrom: 1,
 });
 

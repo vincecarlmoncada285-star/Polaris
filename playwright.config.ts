@@ -8,7 +8,9 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   // In CI, also an HTML report (playwright-report/), which the workflow uploads on failure.
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
+  // In CI: failures as annotations on the run ("github"), the log, and the HTML report that is
+  // uploaded when the run fails.
+  reporter: process.env.CI ? [["github"], ["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: "http://localhost:3100",
     launchOptions: existsSync(chromiumPath) ? { executablePath: chromiumPath } : {},

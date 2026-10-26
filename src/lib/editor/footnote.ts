@@ -6,14 +6,16 @@ import { closeHistory, undo } from "@tiptap/pm/history";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection, Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import { FOOTNOTE_NODE } from "./textblocks";
+import { FOOTNOTE_MAX_CHARS, FOOTNOTE_NODE } from "./textblocks";
 
-export const FOOTNOTE_MAX_CHARS = 2000;
+export { FOOTNOTE_MAX_CHARS };
 
 /** A footnote's text as stored: plain, on one line, at most FOOTNOTE_MAX_CHARS characters. */
 export function cleanFootnoteContent(raw: unknown): string {
   if (typeof raw !== "string") return "";
-  return raw.replace(/\s+/g, " ").trim().slice(0, FOOTNOTE_MAX_CHARS);
+  // trimEnd: a cut that ends in a space would lose it the next time, so cleaning twice is the
+  // same as once.
+  return raw.replace(/\s+/g, " ").trim().slice(0, FOOTNOTE_MAX_CHARS).trimEnd();
 }
 
 /** A random id for a new footnote (crypto.getRandomValues works without a secure context). */

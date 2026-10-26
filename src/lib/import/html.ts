@@ -6,7 +6,7 @@ import { generateText, getSchema } from "@tiptap/core";
 import type { JSONContent } from "@tiptap/core";
 import { DOMParser as SchemaParser } from "@tiptap/pm/model";
 import { documentExtensions } from "@/lib/editor/extensions";
-import { cleanFootnoteContent } from "@/lib/editor/footnote";
+import { cleanFootnoteContent, FOOTNOTE_MAX_CHARS } from "@/lib/editor/footnote";
 import { isAllowedLinkHref } from "@/lib/editor/links";
 import { noneDropped, type DroppedCounts } from "./notice";
 
@@ -18,6 +18,8 @@ export interface ImportedDocument {
   dropped: DroppedCounts;
   /** Footnotes the title had: a title is plain text, so they now start the text instead. */
   titleFootnotes: number;
+  /** Footnotes longer than a footnote can be (FOOTNOTE_MAX_CHARS), so cut short. */
+  shortenedFootnotes: number;
 }
 
 /** The longest title a document can have (src/lib/documents/schema.ts). */
@@ -178,8 +180,31 @@ function takeTitle(doc: Document, el: Element): { text: string; footnotes: numbe
 }
 
 /**
- * Imported HTML as a Polaris document. Title: the element `prepare` found, else the first
- * level-1 heading (either taken out of the body), else the file name without its extension.
+ * The body's first block, if it is a level-1 heading (empty paragraphs before it aside). A
+ * level-1 heading further in is part of the text, a chapter say, and stays there.
+ */
+function leadingHeading(body: HTMLElement): Element | null {
+  for (const node of body.childNodes) {
+    if (node.nodeType === Node.COMMENT_NODE) continue;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent?.trim()) return null;
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = node as Element;
+    if (el.tagName === "H1") return el;
+    if (el.textContent?.trim() || el.querySelector("sup[data-footnote]")) return null;
+  }
+  return null;
+}
+
+const tooLong = (el: Element) =>
+  (el.getAttribute("data-content") ?? "").replace(/\s+/g, " ").trim().length > FOOTNOTE_MAX_CHARS;
+
+/**
+ * Imported HTML as a Polaris document. Title: the element `prepare` found, else a level-1
+ * heading that starts the text (either taken out of the body), else the file name without its
+ * extension.
  */
 export function htmlToDocument(html: string, options: ConvertOptions): ImportedDocument {
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -190,13 +215,14 @@ export function htmlToDocument(html: string, options: ConvertOptions): ImportedD
     return clip(text);
   };
   const sourceTitle = options.prepare?.(doc);
+  const shortenedFootnotes = [...doc.querySelectorAll("sup[data-footnote]")].filter(tooLong).length;
   let title = sourceTitle ? take(sourceTitle) : "";
   const dropped = sanitizeImportedDom(doc);
   for (const [k, v] of Object.entries(options.dropped ?? {})) {
     dropped[k as keyof DroppedCounts] += v ?? 0;
   }
   if (!title) {
-    const h1 = doc.body.querySelector("h1");
+    const h1 = leadingHeading(doc.body);
     if (h1) title = take(h1);
   }
   if (!title) title = clip(fileStem(options.fileName));
@@ -205,7 +231,7 @@ export function htmlToDocument(html: string, options: ConvertOptions): ImportedD
   const parsed = SchemaParser.fromSchema(schema()).parse(doc.body);
   const content = parsed.toJSON() as JSONContent;
   const plainText = generateText(content, extensions, { blockSeparator: "\n\n" });
-  return { title, content, plainText, dropped, titleFootnotes };
+  return { title, content, plainText, dropped, titleFootnotes, shortenedFootnotes };
 }
 
 /** Text for HTML: what a reader should see, never markup. */

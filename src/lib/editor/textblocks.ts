@@ -6,6 +6,12 @@ export const OBJECT_REPLACEMENT = "￼";
 /** The node name of a footnote marker (src/lib/editor/footnote.ts). */
 export const FOOTNOTE_NODE = "footnote";
 
+/**
+ * The longest a footnote's text can be. Here rather than in ./footnote so that code which only
+ * needs the number (the import notice) does not load the editor.
+ */
+export const FOOTNOTE_MAX_CHARS = 2000;
+
 export interface TextBlock {
   /** Document position of the block's opening token. */
   pos: number;

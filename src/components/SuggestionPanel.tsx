@@ -199,7 +199,7 @@ export function SuggestionPanel({
         )}
         {visible.map((s) => {
           const active = s.key === activeKey;
-          const flagged = s.blockText.slice(s.start, s.end);
+          const { flagged } = s;
           return (
             <li
               key={s.key}

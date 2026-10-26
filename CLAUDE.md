@@ -16,8 +16,9 @@ prisma/migrations --to-schema-datamodel prisma/schema.prisma --exit-code` agains
   SQLite shadow file; fails when they differ. `npm run db:push` is for quick local experiments
   only (no migration history); never run destructive commands on `prisma/dev.db`.
 - CI (`.github/workflows/ci.yml`, push and pull_request): Node 22, `npm ci`, typecheck, lint,
-  `npm test`, `db:check`, Playwright's own Chromium, `npm run test:e2e`; the Playwright report
-  (HTML in CI, `playwright.config.ts`) is uploaded on failure. A `docker` job runs
+  `npm test`, `db:check`, Playwright's own Chromium, `npm run test:e2e`; failures are
+  annotations (Playwright's `github` reporter) and the HTML report is uploaded. Actions are
+  pinned by commit SHA with the release tag in a comment: update both together. A `docker` job runs
   `docker compose up -d --build --wait` with a throwaway `.env`, then checks `/api/health`,
   that PID 1 is `docker-init` and that no process is a zombie.
 - Docker: `Dockerfile` (multi-stage `node:22-slim` + openssl for Prisma; runtime = prod
@@ -37,7 +38,9 @@ prisma/migrations --to-schema-datamodel prisma/schema.prisma --exit-code` agains
   - `builtin.ts`: rules. Add a rule there, then add it to `BUILTIN_RULES` (order = overlap priority).
   - `engine.ts`: runs rules, resolves overlaps, LRU cache keyed by context + text.
 - `src/lib/editor/`: ProseMirror bridge. `extensions.ts` is the shared extensions list
-  (`documentExtensions()`: StarterKit, its Link mark registered separately with only an `href`
+  (`documentExtensions()`: StarterKit, superscript and subscript (mutually exclusive; the
+  superscript mark's parse rule skips `sup[data-footnote]`, since mark rules are tried before
+  node rules), its Link mark registered separately with only an `href`
   attribute so rel and target are always `LINK_ATTRIBUTES` and pasted links pass the allow-list
   (`shouldAutoLink` too; a link parsed from HTML must pass the strict `isAllowedLinkHref`),
   Footnote, the Ctrl-click / Mod-k link behaviour): the editor, the importer and the tests all
@@ -53,7 +56,10 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   what the rules read, and both kinds of match are mapped back through it, dropping a fix that
   would replace a marker); `suggestions.ts` is the TipTap extension (decorations,
   dismissals, apply; `setExternalMatches()` merges in AI matches, keyed by paragraph text, rules
-  win on overlap); `ai-scheduler.ts` is the framework-free client scheduler for AI requests
+  win on overlap; keys tell identical paragraphs apart; a dismissal is a rule + document range
+  mapped through every transaction, never a doc-wide text match; code blocks and inline-code
+  ranges get no matches, and Claude is not sent code blocks; `Suggestion.flagged` is the card
+  text, without U+FFFC); `ai-scheduler.ts` is the framework-free client scheduler for AI requests
   (only paragraphs changed since the document opened, 1.5 s idle, 8+ words, 2 in flight, last
   edit first, abort on change, client cache, stop on 403/503, 429 backoff, failures retried;
   fetch and timers injected). The Settings text (`AiToggle.tsx`) must match what it sends.
@@ -79,7 +85,7 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
     output format, "text after the last fallback block" parsing, `AiOutputError`.
     `route-errors.ts`: the SDK-error -> response mapping both AI routes share.
   - `schema.ts` (zod/v4 structured-output schema + clean-up), `anchor.ts` (quote -> offsets),
-    `cache.ts` (LRU + TTL, sha256 keys), `limits.ts` (30/min, 600/day per user for paragraphs;
+    `cache.ts` (LRU + TTL, sha256 keys that include the user id: no answer crosses accounts), `limits.ts` (30/min, 600/day per user for paragraphs;
     6/hour, 30/day for reviews; then whole-server daily caps, `POLARIS_AI_DAILY_PARAGRAPHS` /
     `POLARIS_AI_DAILY_REVIEWS`, checked after the user's own so a refused request uses none;
     a server refusal is code `server_limit`), `protocol.ts` (request schema and response types shared with
@@ -208,11 +214,15 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   counted from the zip), `markdown.ts` (marked GFM; `[^label]` footnotes; raw HTML rendered as
   text), `text.ts` (blank-line paragraphs), and `html.ts`, where every path ends:
   `htmlToDocument()` parses with DOMParser, `sanitizeImportedDom()` strips and counts, then the
-  editor schema converts (a title's footnotes move to a first paragraph of their own).
-  `notice.ts`: what was left out, said once in the new document. The
+  editor schema converts (a title's footnotes move to a first paragraph of their own; only an
+  H1 that starts the body becomes the title; footnotes over `FOOTNOTE_MAX_CHARS`, which lives
+  in `textblocks.ts` so the notice need not load the editor, are cut and counted).
+  `notice.ts`: what was left out (Word equations included) or shortened, said once in the new
+  document. The
   library POSTs `/api/documents` with title, content and plainText (same limits as PATCH).
 - `src/lib/export/`: pure converters from TipTap JSON: `docx.ts` (docx package, lazy;
-  `buildDocx()` + `Packer`), `markdown.ts` (CommonMark, escaped; round-trips through the
+  `buildDocx()` + `Packer`; every string goes through `xmlSafe()`, as a C0 control character
+  makes Word refuse the file), `markdown.ts` (CommonMark, escaped; round-trips through the
   importer: formatting whose delimiters would be read as text, by CommonMark's flanking rules
   or marked's quirks, is left off that text), `text.ts`; `filename.ts` (slugs), `download.ts`, `archive.ts` + `protocol.ts` (the
   Settings zip from paginated `GET /api/documents/export`). Print is `@media print` in

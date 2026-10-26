@@ -3,11 +3,20 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from "@tiptap/p
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { createParagraphChecker } from "@/lib/rules/engine";
 import { expandDeletion } from "@/lib/rules/apply";
+import type { Node as PMNode } from "@tiptap/pm/model";
 import type { RuleContext, RuleMatch } from "@/lib/rules/types";
-import { collectTextBlocks, withoutFootnotes, type TextBlock } from "./textblocks";
+import {
+  collectTextBlocks,
+  OBJECT_REPLACEMENT,
+  withoutFootnotes,
+  type TextBlock,
+} from "./textblocks";
 
 export interface Suggestion extends RuleMatch {
-  /** Stable across unrelated edits: rule + paragraph text + offset. */
+  /**
+   * Stable across unrelated edits: rule + paragraph text (and which of several identical
+   * paragraphs) + offset.
+   */
   key: string;
   /** The rule engine, or Claude (ruleId "ai"). */
   source: "rules" | "ai";
@@ -16,6 +25,8 @@ export interface Suggestion extends RuleMatch {
   /** The paragraph's text, used to widen deletions. */
   blockText: string;
   blockFrom: number;
+  /** The flagged words as the writer reads them: no footnote markers, a line break as a space. */
+  flagged: string;
 }
 
 /**
@@ -24,10 +35,21 @@ export interface Suggestion extends RuleMatch {
  */
 export type ExternalMatches = Map<string, RuleMatch[]>;
 
+/**
+ * A suggestion the writer dismissed: that rule, at that place in the document. The range is
+ * mapped through every edit, so the dismissal follows its words wherever the text around them
+ * changes, and the same words flagged somewhere else still show.
+ */
+interface Dismissal {
+  ruleId: string;
+  from: number;
+  to: number;
+}
+
 interface PluginState {
   suggestions: Suggestion[];
   decorations: DecorationSet;
-  dismissed: Set<string>;
+  dismissed: Dismissal[];
   activeKey: string | null;
   external: ExternalMatches;
 }
@@ -67,14 +89,13 @@ export function mergeMatches(text: string, rules: RuleMatch[], external: RuleMat
 /**
  * Moves matches computed on a block's footnote-free text (withoutFootnotes()) to the block's
  * own text, where each footnote marker is a character. A match that would take in a marker is
- * dropped if it can be applied (applying it would delete the footnote along with the text);
- * with `keepSpans`, one that only marks a stretch of text (a long sentence) is kept.
+ * dropped if it can be applied (applying it would delete the footnote along with the text); one
+ * that only marks a stretch of text (a long sentence, a suggestion to rephrase) is kept.
  */
 function toBlockMatches(
   block: TextBlock,
   prose: ReturnType<typeof withoutFootnotes>,
   matches: RuleMatch[],
-  { keepSpans = false } = {},
 ): RuleMatch[] {
   if (block.footnotes.length === 0) return matches;
   const out: RuleMatch[] = [];
@@ -83,7 +104,7 @@ function toBlockMatches(
     const start = prose.toBlock(m.start, "start");
     const end = prose.toBlock(m.end, "end");
     const spansMarker = block.footnotes.some((f) => f >= start && f < end);
-    if (spansMarker && !(keepSpans && m.replacements.length === 0)) continue;
+    if (spansMarker && m.replacements.length > 0) continue;
     out.push({ ...m, start, end });
   }
   return out;
@@ -106,47 +127,99 @@ export function ruleMatchesFor(
   check: (text: string) => RuleMatch[],
 ): RuleMatch[] {
   const prose = withoutFootnotes(block);
-  return toBlockMatches(block, prose, check(prose.text), { keepSpans: true });
+  return toBlockMatches(block, prose, check(prose.text));
+}
+
+/** Code blocks hold code, not prose: no rule or AI suggestion is made in them. */
+export const CODE_BLOCK_NODE = "codeBlock";
+const CODE_MARK = "code";
+
+/** Where a block's inline code is, as [start, end) offsets in its text (one per inline atom). */
+function codeRanges(node: PMNode): [number, number][] {
+  const ranges: [number, number][] = [];
+  let offset = 0;
+  node.forEach((child) => {
+    const length = child.isText ? (child.text ?? "").length : 1;
+    if (child.isText && child.marks.some((m) => m.type.name === CODE_MARK)) {
+      const last = ranges.at(-1);
+      if (last && last[1] === offset) last[1] = offset + length;
+      else ranges.push([offset, offset + length]);
+    }
+    offset += length;
+  });
+  return ranges;
+}
+
+/** The flagged words as the writer reads them (see Suggestion.flagged). */
+function readable(block: TextBlock, start: number, end: number): string {
+  const text = block.text.slice(start, end);
+  if (!text.includes(OBJECT_REPLACEMENT)) return text;
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== OBJECT_REPLACEMENT) out += text[i];
+    else if (!block.footnotes.includes(start + i)) out += " ";
+  }
+  return out;
 }
 
 function computeSuggestions(
   state: EditorState | { doc: EditorState["doc"] },
   check: (text: string) => RuleMatch[],
   external: ExternalMatches,
-  dismissed: Set<string>,
+  dismissed: Dismissal[],
 ): Suggestion[] {
   const out: Suggestion[] = [];
+  const dismissedAt = new Set(dismissed.map((d) => `${d.ruleId}:${d.from}-${d.to}`));
+  // How many paragraphs with the same text came before, so identical ones get different keys.
+  const copies = new Map<string, number>();
   for (const block of collectTextBlocks(state.doc)) {
     if (!block.text.trim()) continue;
+    const node = state.doc.nodeAt(block.pos);
+    if (!node || node.type.name === CODE_BLOCK_NODE) continue;
     const blockHash = hash(block.text);
+    const copy = copies.get(blockHash) ?? 0;
+    copies.set(blockHash, copy + 1);
+    const code = codeRanges(node);
     // Dismissed matches go before merging: one the writer rejected shows nothing, so it must
-    // not hide an overlapping match either.
-    const visible = (m: RuleMatch) => !dismissed.has(dismissKey(m, block.text));
+    // not hide an overlapping match either. So do matches in inline code (`like this`), except
+    // a long sentence's span, which is about the whole sentence.
+    const visible = (m: RuleMatch) =>
+      !dismissedAt.has(`${m.ruleId}:${block.posAt(m.start)}-${block.posAt(m.end)}`) &&
+      (m.ruleId === "long-sentence" || !code.some(([s, e]) => m.start < e && s < m.end));
     // Keyed by text, so a result only ever shows on the exact text it was computed for.
     const matches = mergeMatches(
       block.text,
       ruleMatchesFor(block, check).filter(visible),
       externalMatchesFor(block, external).filter(visible),
     );
+    const blockKey = copy === 0 ? blockHash : `${blockHash}#${copy}`;
     for (const match of matches) {
-      const key = `${match.ruleId}:${blockHash}:${match.start}-${match.end}`;
       out.push({
         ...match,
-        key,
+        key: `${match.ruleId}:${blockKey}:${match.start}-${match.end}`,
         source: match.ruleId === "ai" ? "ai" : "rules",
         from: block.posAt(match.start),
         to: block.posAt(match.end),
         blockText: block.text,
         blockFrom: block.posAt(0),
+        flagged: readable(block, match.start, match.end),
       });
     }
   }
   return out;
 }
 
-/** Dismissals key on the flagged text itself, so they survive edits elsewhere in the paragraph. */
-function dismissKey(match: RuleMatch, blockText: string): string {
-  return `${match.ruleId}:${blockText.slice(match.start, match.end).toLowerCase()}`;
+/** Moves dismissals with the edit; one whose words were deleted is forgotten. */
+function mapDismissals(dismissed: Dismissal[], tr: Transaction): Dismissal[] {
+  if (!tr.docChanged || dismissed.length === 0) return dismissed;
+  const out: Dismissal[] = [];
+  for (const d of dismissed) {
+    // Text typed right before or right after the words is not part of them.
+    const from = tr.mapping.map(d.from, 1);
+    const to = tr.mapping.map(d.to, -1);
+    if (to > from) out.push({ ...d, from, to });
+  }
+  return out;
 }
 
 function buildDecorations(
@@ -199,7 +272,7 @@ export const Suggestions = Extension.create<SuggestionsOptions>({
         key: suggestionsKey,
         state: {
           init(_config, state) {
-            const dismissed = new Set<string>();
+            const dismissed: Dismissal[] = [];
             const external: ExternalMatches = new Map();
             const suggestions = computeSuggestions(state, check, external, dismissed);
             return {
@@ -216,8 +289,10 @@ export const Suggestions = Extension.create<SuggestionsOptions>({
             if (meta?.type === "dismiss") {
               const target = prev.suggestions.find((s) => s.key === meta.key);
               if (target) {
-                dismissed = new Set(dismissed);
-                dismissed.add(dismissKey(target, target.blockText));
+                dismissed = [
+                  ...dismissed,
+                  { ruleId: target.ruleId, from: target.from, to: target.to },
+                ];
               }
               if (activeKey === meta.key) activeKey = null;
             } else if (meta?.type === "activate") {
@@ -226,6 +301,7 @@ export const Suggestions = Extension.create<SuggestionsOptions>({
               external = meta.matches;
             }
             if (!tr.docChanged && !meta) return prev;
+            dismissed = mapDismissals(dismissed, tr);
 
             const suggestions =
               tr.docChanged || meta?.type !== "activate"

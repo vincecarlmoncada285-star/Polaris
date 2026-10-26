@@ -55,6 +55,7 @@ describe("feedback cache", () => {
 
 describe("feedbackCacheKey", () => {
   const base: FeedbackKeyInput = {
+    userId: "user-1",
     model: "claude-opus-5-5",
     effort: "low",
     promptVersion: "v1",
@@ -81,6 +82,7 @@ describe("feedbackCacheKey", () => {
   });
 
   it.each<[string, Partial<FeedbackKeyInput>]>([
+    ["user", { userId: "user-2" }],
     ["model", { model: "claude-haiku-5-5" }],
     ["effort", { effort: "medium" }],
     ["prompt version", { promptVersion: "v2" }],
