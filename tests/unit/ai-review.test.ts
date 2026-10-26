@@ -463,6 +463,23 @@ describe("cleanReview", () => {
     expect(result.sections).toEqual([{ paragraph: 1, heading: null, note: "Kept note." }]);
   });
 
+  it("anchors only the priorities it keeps, and normalizes the text once", () => {
+    // A 600,000-character document and a reply with thousands of priorities whose quotes are
+    // not in it: each miss used to normalize the whole text again, freezing the server.
+    const text = `${"Homework helps some students and not others. ".repeat(13_500)}`;
+    const priorities = Array.from({ length: 3000 }, (_, i) => ({
+      title: `T${i}`,
+      detail: "D.",
+      quote: `a phrase that is nowhere ${i}`,
+      category: "argument" as const,
+    }));
+    const started = performance.now();
+    const result = cleanReview(raw({ priorities }), { text, paragraphs: 1 })!;
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result.priorities).toHaveLength(REVIEW_LIMITS.priorities);
+    expect(result.priorities.every((p) => p.quote === null)).toBe(true);
+  });
+
   it("keeps only paragraph numbers that exist", () => {
     const notes = [0, 1, 3, 4, 2.5, -1, null].map((paragraph) => ({
       paragraph,

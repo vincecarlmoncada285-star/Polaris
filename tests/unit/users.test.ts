@@ -9,8 +9,11 @@ import {
   DUMMY_PASSWORD_HASH,
   EmailTakenError,
   IncorrectPasswordError,
+  MAX_CONCURRENT_PASSWORD_HASHES,
+  PasswordBusyError,
   SessionRevokedError,
 } from "@/lib/users/service";
+import type { Gate } from "@/lib/concurrency";
 import { createTestDb } from "./test-db";
 
 // Pass-through spy, so tests can check that an unknown email still pays for a bcrypt compare.
@@ -151,6 +154,25 @@ describe("verifyCredentials", () => {
 
   it("uses a dummy hash as slow as a real one", () => {
     expect(getRounds(DUMMY_PASSWORD_HASH)).toBe(BCRYPT_COST);
+  });
+
+  it("refuses at once, without hashing, while the process is busy with other passwords", async () => {
+    const email = uniqueEmail();
+    await service.createUser({ email, password: PASSWORD });
+    const gate = (globalThis as unknown as { polarisPasswordGate: Gate }).polarisPasswordGate;
+    const held = Array.from({ length: MAX_CONCURRENT_PASSWORD_HASHES }, () => gate.tryEnter()!);
+    vi.mocked(compare).mockClear();
+    try {
+      await expect(service.verifyCredentials(email, PASSWORD)).rejects.toThrow(PasswordBusyError);
+      await expect(
+        service.createUser({ email: uniqueEmail(), password: PASSWORD }),
+      ).rejects.toThrow(PasswordBusyError);
+      expect(compare).not.toHaveBeenCalled();
+    } finally {
+      for (const leave of held) leave();
+    }
+    expect(gate.active).toBe(0);
+    expect(await service.verifyCredentials(email, PASSWORD)).not.toBeNull();
   });
 });
 

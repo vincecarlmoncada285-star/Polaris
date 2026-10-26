@@ -162,6 +162,7 @@ describe("POST /api/me/password", () => {
   const body = (currentPassword: string, newPassword: string) =>
     new Request("http://localhost/api/me/password", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currentPassword, newPassword }),
     });
 
@@ -210,7 +211,8 @@ describe("POST /api/me/password", () => {
 });
 
 describe("POST /api/me/sign-out-others", () => {
-  const post = () => signOutOthers();
+  const post = () =>
+    signOutOthers(new Request("http://localhost/api/me/sign-out-others", { method: "POST" }));
 
   it("signs out every other session and keeps this one", async () => {
     const user = await newUser();

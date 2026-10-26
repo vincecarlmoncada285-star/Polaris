@@ -22,5 +22,7 @@ export default async function DocumentPage({ params }: { params: Params }) {
   const user = await requirePageUser(`/documents/${encodeURIComponent(id)}`);
   const doc = await loadDocument(user.id, id);
   if (!doc) notFound();
-  return <DocumentEditor document={doc} />;
+  // Keyed by version: when the editor learns its copy is out of date and refreshes the page,
+  // it starts again from the newer text instead of keeping the old one.
+  return <DocumentEditor key={`${doc.id}:${doc.version}`} document={doc} />;
 }

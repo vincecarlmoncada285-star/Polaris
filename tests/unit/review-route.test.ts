@@ -79,11 +79,12 @@ function contentOf(paragraphs: string[], { heading = true } = {}) {
 async function writeDocument(userId: string, paragraphs: string[], title = "Homework essay") {
   const doc = await documents.create(userId, { title });
   const plainText = ["Introduction", ...paragraphs].join("\n\n");
-  return (await documents.update(userId, doc.id, {
+  await documents.update(userId, doc.id, {
     content: contentOf(paragraphs),
     plainText,
     goals: { documentType: "essay", targetWords: 2000 },
-  }))!;
+  });
+  return (await documents.get(userId, doc.id))!;
 }
 
 const longEnough = () => [P1, words(200)];

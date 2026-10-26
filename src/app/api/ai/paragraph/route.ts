@@ -11,42 +11,13 @@ import {
   type UpstreamMessages,
 } from "@/lib/ai/route-errors";
 import { requireUser } from "@/lib/auth/session";
+import { crossSiteRefusal, readBody } from "@/lib/http/request";
 import { users } from "@/lib/users";
 
 // Room for a 4000-character paragraph and previous paragraph, the title and JSON escaping.
 const MAX_BODY_CHARS = 40_000;
 // The same room in UTF-8 (at most 4 bytes a character), enforced while the body arrives.
 const MAX_BODY_BYTES = MAX_BODY_CHARS * 4;
-
-type BodyRead = { ok: true; text: string } | { ok: false; status: 400 | 413 };
-
-/**
- * The request body as text, never holding more than `maxBytes` of it: a declared
- * Content-Length over the cap is refused unread, and a body without one (chunked) is cut off
- * as soon as it passes the cap.
- */
-async function readBody(req: Request, maxBytes: number): Promise<BodyRead> {
-  if (Number(req.headers.get("content-length")) > maxBytes) return { ok: false, status: 413 };
-  if (!req.body) return { ok: true, text: "" };
-  const reader = req.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = "";
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return { ok: true, text: text + decoder.decode() };
-      bytes += value.byteLength;
-      if (bytes > maxBytes) {
-        void reader.cancel().catch(() => {});
-        return { ok: false, status: 413 };
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } catch {
-    return { ok: false, status: 400 };
-  }
-}
 
 const UNAVAILABLE = "AI suggestions aren't set up on this server.";
 const RATE_LIMITED = "Too many AI requests. Try again in a moment.";
@@ -65,6 +36,11 @@ const UPSTREAM: UpstreamMessages = {
 export async function POST(req: Request) {
   const userId = await requireUser();
   if (userId instanceof NextResponse) return userId;
+  const crossSite = crossSiteRefusal(req);
+  if (crossSite) return crossSite;
+  if (!/^application\/json\s*(?:;|$)/i.test(req.headers.get("content-type") ?? "")) {
+    return fail(415, "Send the request as JSON.");
+  }
   // Read from the database rather than the session token, so switching AI off takes effect
   // on the very next request.
   const user = await users.getUser(userId);
@@ -118,7 +94,11 @@ export async function POST(req: Request) {
   // Only requests that will reach Claude count: a cached answer costs nothing.
   const limit = aiLimits.check(userId);
   if (!limit.ok) {
-    return fail(429, RATE_LIMITED, "rate_limited", {
+    const message =
+      limit.scope === "server"
+        ? "AI suggestions have reached this server's limit for today. They will be back tomorrow."
+        : RATE_LIMITED;
+    return fail(429, message, limit.scope === "server" ? "server_limit" : "rate_limited", {
       "Retry-After": retryAfterSeconds(limit.retryAfterMs),
     });
   }

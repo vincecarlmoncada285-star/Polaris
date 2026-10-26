@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
-import { compare, hash } from "bcryptjs";
+import { compare as bcryptCompare, hash as bcryptHash } from "bcryptjs";
+import { createGate, type Gate } from "@/lib/concurrency";
 import {
   createUserSchema,
   emailSchema,
@@ -17,6 +18,40 @@ export const BCRYPT_COST = 12;
  * emails are registered.
  */
 export const DUMMY_PASSWORD_HASH = "$2b$12$LTB8Jrcmc3btZc0ZkTJKBOgPfZgFdmACTXiws.YPvGAMoXAEDxxdm";
+
+/**
+ * Password hashing is deliberately slow (a cost-12 bcrypt is ~350 ms of CPU on the server's
+ * one JavaScript thread), and sign-in is open to anyone. So at most a few run at once across
+ * the process; beyond that the attempt is refused at once (PasswordBusyError, shown as "try
+ * again later") instead of queueing, so a flood of sign-ins cannot stall every other request.
+ */
+export const MAX_CONCURRENT_PASSWORD_HASHES = 4;
+
+export class PasswordBusyError extends Error {
+  constructor() {
+    super("Too many password checks at once");
+    this.name = "PasswordBusyError";
+  }
+}
+
+const globalForGate = globalThis as unknown as { polarisPasswordGate?: Gate };
+const passwordGate = (globalForGate.polarisPasswordGate ??= createGate(
+  MAX_CONCURRENT_PASSWORD_HASHES,
+));
+
+async function gated<T>(work: () => Promise<T>): Promise<T> {
+  const leave = passwordGate.tryEnter();
+  if (!leave) throw new PasswordBusyError();
+  try {
+    return await work();
+  } finally {
+    leave();
+  }
+}
+
+const compare = (password: string, passwordHash: string) =>
+  gated(() => bcryptCompare(password, passwordHash));
+const hash = (password: string, cost: number) => gated(() => bcryptHash(password, cost));
 
 export interface UserDTO {
   id: string;

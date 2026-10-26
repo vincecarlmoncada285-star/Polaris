@@ -9,8 +9,27 @@ export interface DocumentDTO {
   plainText: string;
   wordCount: number;
   goals: WritingGoals;
+  /** Raised by every update; see `baseVersion` in UpdateDocumentInput. */
+  version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** What a save returns: enough for the editor to carry on, without echoing the document. */
+export type SavedDocument = Pick<DocumentDTO, "id" | "version" | "updatedAt" | "wordCount">;
+
+/**
+ * The save named a version the document has moved past: someone (usually the same writer in
+ * another tab) saved a newer one. Carries the current version so the editor can explain.
+ */
+export class DocumentConflictError extends Error {
+  constructor(
+    readonly version: number,
+    readonly updatedAt: string,
+  ) {
+    super("The document has changed since this version.");
+    this.name = "DocumentConflictError";
+  }
 }
 
 export type DocumentSummary = Pick<DocumentDTO, "id" | "title" | "wordCount" | "updatedAt"> & {
@@ -22,6 +41,9 @@ export type DocumentSummary = Pick<DocumentDTO, "id" | "title" | "wordCount" | "
  * document (the archive's fallback), so a page carries each document's text once.
  */
 export type ExportedDocument = Omit<DocumentDTO, "plainText"> & { plainText?: string };
+
+/** Characters of plain text the library shows under each title. */
+export const EXCERPT_CHARS = 160;
 
 const isDocContent = (content: unknown) =>
   typeof content === "object" && content !== null && (content as { type?: unknown }).type === "doc";
@@ -44,6 +66,7 @@ function toDTO(row: Row): DocumentDTO {
     plainText: row.plainText,
     wordCount: row.wordCount,
     goals: parseJson<WritingGoals>(row.goals, {}),
+    version: row.version,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -55,18 +78,42 @@ function toDTO(row: Row): DocumentDTO {
 export function createDocumentService(db: PrismaClient) {
   return {
     async list(userId: string): Promise<DocumentSummary[]> {
-      const rows = await db.document.findMany({
-        where: { userId },
-        orderBy: { updatedAt: "desc" },
-        select: { id: true, title: true, wordCount: true, updatedAt: true, plainText: true },
-      });
+      // The excerpt is cut in SQL: reading every document's whole plain text to keep 160
+      // characters of it cost hundreds of megabytes per library load for long documents.
+      const [rows, excerpts] = await Promise.all([
+        db.document.findMany({
+          where: { userId },
+          orderBy: { updatedAt: "desc" },
+          select: { id: true, title: true, wordCount: true, updatedAt: true },
+        }),
+        db.$queryRaw<{ id: string; excerpt: string }[]>`
+          SELECT "id", substr("plainText", 1, ${EXCERPT_CHARS}) AS "excerpt" FROM "Document"
+          WHERE "userId" = ${userId}`,
+      ]);
+      const excerptOf = new Map(excerpts.map((e) => [e.id, e.excerpt]));
       return rows.map((r) => ({
         id: r.id,
         title: r.title,
         wordCount: r.wordCount,
         updatedAt: r.updatedAt.toISOString(),
-        excerpt: r.plainText.slice(0, 160),
+        excerpt: excerptOf.get(r.id) ?? "",
       }));
+    },
+
+    /** How many documents the user has, and their stored characters (content + plain text). */
+    /**
+     * How many documents the user has and how many characters they store (content and plain
+     * text). With `exceptId`, that document's characters are left out of `chars`, for a save
+     * that is about to replace them.
+     */
+    async usage(userId: string, exceptId?: string): Promise<{ documents: number; chars: number }> {
+      const [row] = await db.$queryRaw<
+        { documents: number | bigint; chars: number | bigint | null }[]
+      >`SELECT count(*) AS "documents",
+          sum(CASE WHEN "id" = ${exceptId ?? null} THEN 0
+              ELSE length("content") + length("plainText") END) AS "chars"
+        FROM "Document" WHERE "userId" = ${userId}`;
+      return { documents: Number(row?.documents ?? 0), chars: Number(row?.chars ?? 0) };
     },
 
     async get(userId: string, id: string): Promise<DocumentDTO | null> {
@@ -87,12 +134,17 @@ export function createDocumentService(db: PrismaClient) {
       return toDTO(row);
     },
 
+    /**
+     * Applies a save. Null if the user has no such document. With `baseVersion`, the write
+     * only happens if the document is still at that version (checked in the UPDATE itself),
+     * otherwise DocumentConflictError. Every update raises the version.
+     */
     async update(
       userId: string,
       id: string,
       input: UpdateDocumentInput,
-    ): Promise<DocumentDTO | null> {
-      const data: Record<string, unknown> = {};
+    ): Promise<SavedDocument | null> {
+      const data: Record<string, unknown> = { version: { increment: 1 } };
       if (input.title !== undefined) data.title = input.title || "Untitled document";
       if (input.content !== undefined) data.content = JSON.stringify(input.content);
       if (input.plainText !== undefined) {
@@ -100,10 +152,30 @@ export function createDocumentService(db: PrismaClient) {
         data.wordCount = countWords(input.plainText);
       }
       if (input.goals !== undefined) data.goals = JSON.stringify(input.goals);
-      const { count } = await db.document.updateMany({ where: { id, userId }, data });
-      if (count === 0) return null;
-      const row = await db.document.findFirst({ where: { id, userId } });
-      return row ? toDTO(row) : null;
+      const where =
+        input.baseVersion === undefined
+          ? { id, userId }
+          : { id, userId, version: input.baseVersion };
+      const { count } = await db.document.updateMany({ where, data });
+      const row = await db.document.findFirst({
+        where: { id, userId },
+        select: { id: true, version: true, updatedAt: true, wordCount: true },
+      });
+      if (!row) return null;
+      if (count === 0) throw new DocumentConflictError(row.version, row.updatedAt.toISOString());
+      return { ...row, updatedAt: row.updatedAt.toISOString() };
+    },
+
+    /** The version and save time only, for an editor checking whether it is out of date. */
+    async version(
+      userId: string,
+      id: string,
+    ): Promise<Pick<DocumentDTO, "version" | "updatedAt"> | null> {
+      const row = await db.document.findFirst({
+        where: { id, userId },
+        select: { version: true, updatedAt: true },
+      });
+      return row ? { version: row.version, updatedAt: row.updatedAt.toISOString() } : null;
     },
 
     /**

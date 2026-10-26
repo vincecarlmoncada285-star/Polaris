@@ -42,9 +42,13 @@ export interface Sentence {
 export function splitSentences(text: string): Sentence[] {
   const sentences: Sentence[] = [];
   let start = 0;
-  const re = /[.!?]+["'”’)\]]*(?=\s+|$)/g;
+  // The whole run of terminal punctuation and closers in one match, then the "followed by
+  // whitespace or the end" test by hand: as a lookahead after a greedy run, a long run of
+  // "." not followed by a space backtracked from every starting point (O(n²) on "....").
+  const re = /[.!?]+["'”’)\]]*/g;
   for (let m = re.exec(text); m; m = re.exec(text)) {
     const end = m.index + m[0].length;
+    if (end < text.length && !/\s/.test(text[end]!)) continue;
     // A closing quote or bracket after the period means the sentence really ends.
     if (m[0] === "." && isAbbreviation(text, m.index)) continue;
     // A decimal like "3.5" never matches because of the lookahead requiring whitespace.

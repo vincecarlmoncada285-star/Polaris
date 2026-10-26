@@ -63,7 +63,7 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   `protocol.ts`).
   - `client.ts`: `import "server-only"`; lazy SDK client, `isAiConfigured()`, and the one place
     that picks the model (`POLARIS_AI_MODEL`) and effort (`POLARIS_AI_PARAGRAPH_EFFORT`,
-    `POLARIS_AI_REVIEW_EFFORT`, default high).
+    default low; `POLARIS_AI_REVIEW_EFFORT`, default high).
   - `paragraph.ts`: system prompt (keep it byte-stable; bump `PROMPT_VERSION` when it, the user
     message or the schema changes), user message, the `beta.messages.parse` request, refusal /
     max_tokens handling.
@@ -80,7 +80,9 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
     `route-errors.ts`: the SDK-error -> response mapping both AI routes share.
   - `schema.ts` (zod/v4 structured-output schema + clean-up), `anchor.ts` (quote -> offsets),
     `cache.ts` (LRU + TTL, sha256 keys), `limits.ts` (30/min, 600/day per user for paragraphs;
-    6/hour, 30/day for reviews), `protocol.ts` (request schema and response types shared with
+    6/hour, 30/day for reviews; then whole-server daily caps, `POLARIS_AI_DAILY_PARAGRAPHS` /
+    `POLARIS_AI_DAILY_REVIEWS`, checked after the user's own so a refused request uses none;
+    a server refusal is code `server_limit`), `protocol.ts` (request schema and response types shared with
     the client, review types and word limits; plain zod).
   - Routes: `src/app/api/ai/paragraph/route.ts`; `src/app/api/documents/[id]/review/route.ts`
     (POST runs and saves a review, `maxDuration = 300`; GET returns the latest with `stale`).
@@ -91,7 +93,12 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   PrismaClient, so tests use a temp DB). Every method takes `userId` first; `exportPage()` pages
   by id for the data export (`src/app/api/documents/export/route.ts`), at most 20 documents and
   about 8 M characters a page, plainText only when the content is unusable; `limits.ts`: 300
-  export pages an hour per user. `reviews.ts`: saved
+  export pages an hour per user, and the write limits (1000 documents and 200 M stored
+  characters per user, 120 creates an hour, 240 saves a minute), which `writes.ts`
+  (`refuseCreate()`, `refuseSave()`) turns into 429 / 403 responses. `Document.version` goes
+  up on every save; a PATCH with `baseVersion` from another version throws
+  `DocumentConflictError` (409); `update()` returns only id, version, updatedAt, wordCount.
+  `reviews.ts`: saved
   reviews (`DocumentReview`), newest 5 per document, `contentHash()` (sha256 of the reviewed
   blocks' text, heading levels and footnotes) for staleness. `blocks.ts`: textblocks from the
   stored TipTap JSON (`reviewBlocks()`: what a review sends, measures and hashes; never the
@@ -109,7 +116,10 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   - `src/auth.config.ts`: edge-safe config (pages, `authorized`, jwt/session callbacks). Used by
     `src/middleware.ts`. Never import Prisma or bcrypt here.
   - `src/auth.ts`: full config (Credentials provider, sign-in rate limit); exports
-    `handlers, auth, signIn, signOut`. Route handler: `src/app/api/auth/[...nextauth]/route.ts`.
+    `handlers, auth, signIn, signOut`. Route handler: `src/app/api/auth/[...nextauth]/route.ts`
+    (POST bodies capped at 16 KB before Auth.js reads them). bcrypt runs behind a gate in the
+    users service (`MAX_CONCURRENT_PASSWORD_HASHES`; beyond it `PasswordBusyError`, shown as
+    rate limited), so a flood of sign-ins cannot stall the event loop.
   - `src/lib/auth/session.ts`: `requireUser()` for API routes (`requireUserSession()` also
     returns the checked version, for the routes that raise it), `getCurrentUser()` and
     `requirePageUser()` for server components. All of them refuse a session whose JWT
@@ -122,8 +132,10 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
     browser's own `POST /api/auth/session` changes nothing. Used by `POST /api/me/password` and
     `POST /api/me/sign-out-others` (rate limited, `limits.revokeSessions`).
   - `src/lib/auth/`: `routes.ts` (what middleware protects), `callback-url.ts` (open-redirect
-    sanitizer), `actions.ts` (sign-in/up/out server actions), `limits.ts` (auth rate limits; `clientIp()` trusts X-Forwarded-For only with
-    `TRUSTED_PROXY_HOPS`).
+    sanitizer), `actions.ts` (sign-in/up/out server actions), `limits.ts` (auth rate limits,
+    including per IP across emails; `clientIp()` trusts X-Forwarded-For only with
+    `TRUSTED_PROXY_HOPS`), `signup-policy.ts` (`POLARIS_SIGNUP=closed`,
+    `POLARIS_SIGNUP_EMAIL_DOMAINS`; read per request by the sign-up action and both auth pages).
   - `src/types/next-auth.d.ts`: types `session.user.id` as string.
 - `src/middleware.ts`: the edge-safe `authorized` redirects, then a per-request CSP nonce for
   every page (matcher: everything but `api/`, `_next/` and the icon, so a dotted 404 path gets
@@ -147,10 +159,18 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   never the message). `SiteFooter` is on every page (also in `global-error.tsx`).
   `icon.svg` is the favicon; the root layout sets the description and light/dark theme-color.
 - `src/lib/rate-limit.ts`: generic in-memory sliding-window limiter with an injectable clock.
-  Reuse it for AI routes.
-- `src/lib/autosave.ts`: debounced, serialized saver. Anything holding unsaved edits registers
-  with `registerPendingSave()`; `SignOutButton` awaits `flushPendingSaves()` before the session
-  cookie is cleared.
+  Reuse it for AI routes. `src/lib/concurrency.ts`: `createGate(max)`, fail-fast.
+- `src/lib/http/request.ts`: `readBody()` / `readJson()` (415 unless JSON, 413 past the cap while
+  the body arrives, 400) and `crossSiteRefusal()` (403 on `Sec-Fetch-Site` other than
+  same-origin / none). Every route that changes something uses them; a body-less one at least
+  calls `crossSiteRefusal()`.
+- `src/lib/autosave.ts`: debounced, serialized saver. A failed save keeps its value and retries
+  on its own (`RETRY_DELAYS_MS`, or the error's `retryAfterMs`; null = wait for the writer);
+  `flush()` resolves to whether everything was saved. Anything holding unsaved edits registers
+  with `registerPendingSave()`; `SignOutButton` awaits `flushPendingSaves()` (false: it asks
+  before signing out) before the session cookie is cleared, then `clearAllDrafts()`.
+  `src/lib/editor/drafts.ts`: the per-tab sessionStorage copy of unsaved edits, and
+  `keepaliveAllowed()` (browsers refuse keepalive bodies over 64 KiB).
 - `src/components/`: React UI (`auth/`, `settings/`, `Navbar.tsx`). The editor's side panel is
   `PanelTabs.tsx` (WAI-ARIA tabs, roving tabindex, choice remembered in localStorage;
   `useRememberedTab()` also returns `show()`, a switch that is not remembered, used to show
@@ -170,7 +190,10 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
   `openLibrary()` in `e2e/helpers.ts`). `DocumentEditor.tsx` also keeps `document.title` in step
   with the title, guards unload while the autosaver is pending/saving/error
   (`useUnsavedChangesGuard.ts`), says so (with a link to `/session/expired` in a new tab) when
-  a save gets 401, shows `FirstRunHelp.tsx` on a document that opened empty (dismissal in
+  a save gets 401, sends `baseVersion` with every save and on 409 shows the conflict notice
+  (Keep this version / Load the saved version), asks `?fields=version` when it opens or comes
+  back into view and refreshes when nothing is unsaved (the page keys the editor by
+  `id:version`), offers a sessionStorage draft back (Restore my edits / Discard), shows `FirstRunHelp.tsx` on a document that opened empty (dismissal in
   localStorage; its AI line follows the server's `configured` first; dismissing it moves focus
   to the title), and handles the page-level shortcuts on window keydown:
   Alt+] / Alt+[ (`src/lib/editor/suggestion-nav.ts`), Escape (ProseMirror cancels every Escape

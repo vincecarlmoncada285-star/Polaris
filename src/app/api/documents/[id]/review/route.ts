@@ -21,6 +21,7 @@ import { blocksFootnotes, blocksText, reviewBlocks } from "@/lib/documents/block
 import { contentHash, type StoredReview } from "@/lib/documents/reviews";
 import { users } from "@/lib/users";
 import { countWords } from "@/lib/text/stats";
+import { crossSiteRefusal } from "@/lib/http/request";
 
 // A review of a long document at high effort can take minutes.
 export const maxDuration = 300;
@@ -70,6 +71,8 @@ export async function GET(_req: Request, { params }: Ctx) {
 export async function POST(req: Request, { params }: Ctx) {
   const userId = await requireUser();
   if (userId instanceof NextResponse) return userId;
+  const crossSite = crossSiteRefusal(req);
+  if (crossSite) return crossSite;
   const doc = await documents.get(userId, (await params).id);
   if (!doc) return notFound();
   // Read from the database rather than the session token, so switching AI off takes effect
@@ -112,7 +115,11 @@ export async function POST(req: Request, { params }: Ctx) {
 
   const limit = reviewLimits.check(userId);
   if (!limit.ok) {
-    return fail(429, "You have asked for several reviews recently.", "rate_limited", {
+    const server = limit.scope === "server";
+    const message = server
+      ? "Reviews have reached this server's limit for today. Try again tomorrow."
+      : "You have asked for several reviews recently.";
+    return fail(429, message, server ? "server_limit" : "rate_limited", {
       "Retry-After": retryAfterSeconds(limit.retryAfterMs),
     });
   }

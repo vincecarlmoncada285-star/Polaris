@@ -2,7 +2,7 @@
 // comes back. Built with zod/v4 for the SDK helper, and kept to simple types: the helper drops
 // constraints such as maxLength or maxItems, so lengths and counts are enforced here.
 import { z } from "zod/v4";
-import { findQuote } from "./anchor";
+import { createQuoteFinder, type QuoteFinder } from "./anchor";
 import { REVIEW_CATEGORIES, type ReviewResult } from "./protocol";
 import { truncate } from "./schema";
 
@@ -81,13 +81,17 @@ const FOOTNOTE_MARKER = /\[\^\d+\]/g;
  * tolerates (curly vs straight quotes, dashes, whitespace), plus wrapping quotation marks, a
  * paragraph marker and footnote markers copied from the prompt (the text has no markers).
  */
-export function anchorQuote(text: string, raw: string | null): string | null {
+export function anchorQuote(
+  text: string,
+  raw: string | null,
+  find: QuoteFinder = createQuoteFinder(text),
+): string | null {
   if (raw === null) return null;
   const bare = raw.trim().replace(LEADING_MARKER, "").replace(OUTER_QUOTES, "");
-  const candidates = [raw.trim(), bare, bare.replace(FOOTNOTE_MARKER, "").trim()];
+  const candidates = new Set([raw.trim(), bare, bare.replace(FOOTNOTE_MARKER, "").trim()]);
   for (const q of candidates) {
     if (!q || q.length > REVIEW_LIMITS.quoteChars) continue;
-    const range = findQuote(text, q);
+    const range = find(q);
     if (range) return text.slice(range[0], range[1]);
   }
   return null;
@@ -108,11 +112,15 @@ export function cleanReview(
   const L = REVIEW_LIMITS;
   const summary = clean(raw.summary, L.summaryChars);
   if (!summary) return null;
+  // One normalization of the text for every quote, and only the items that can be kept are
+  // anchored: the schema does not cap the arrays, and a reply with thousands of priorities
+  // must not mean thousands of searches through a 600,000-character document.
+  const find = createQuoteFinder(text);
   return {
     summary,
     thesis: {
       assessment: clean(raw.thesis.assessment, L.assessmentChars),
-      quote: anchorQuote(text, raw.thesis.quote),
+      quote: anchorQuote(text, raw.thesis.quote, find),
     },
     strengths: raw.strengths
       .map((s) => clean(s, L.strengthChars))
@@ -122,11 +130,12 @@ export function cleanReview(
       .map((p) => ({
         title: clean(p.title, L.titleChars),
         detail: clean(p.detail, L.detailChars),
-        quote: anchorQuote(text, p.quote),
+        quote: p.quote,
         category: p.category,
       }))
       .filter((p) => p.title && p.detail)
-      .slice(0, L.priorities),
+      .slice(0, L.priorities)
+      .map((p) => ({ ...p, quote: anchorQuote(text, p.quote, find) })),
     sections: raw.sections
       .map((s) => ({
         paragraph:

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { sanitizeCallbackUrl } from "@/lib/auth/callback-url";
 import { ACCOUNT_CREATED_PARAM, SIGN_UP_PATH } from "@/lib/auth/routes";
+import { signupPolicy } from "@/lib/auth/signup-policy";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { SignInForm } from "@/components/auth/SignInForm";
 
@@ -20,12 +21,15 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
       title="Sign in"
       subtitle="Pick up your writing where you left off."
       footer={
-        <>
-          New to Polaris?{" "}
-          <Link href={SIGN_UP_PATH} className="font-medium text-accent underline">
-            Create an account
-          </Link>
-        </>
+        // Read per request (the page is dynamic: it reads searchParams).
+        signupPolicy().open ? (
+          <>
+            New to Polaris?{" "}
+            <Link href={SIGN_UP_PATH} className="font-medium text-accent underline">
+              Create an account
+            </Link>
+          </>
+        ) : undefined
       }
     >
       <SignInForm callbackUrl={sanitizeCallbackUrl(params.callbackUrl)} notice={notice} />

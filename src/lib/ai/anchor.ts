@@ -101,17 +101,30 @@ export function findQuote(
   quote: string,
   occurrence: number | null = null,
 ): [number, number] | null {
-  if (!quote) return null;
-  const exact = pick(occurrences(text, quote), occurrence);
-  if (exact !== null) return [exact, exact + quote.length];
+  return createQuoteFinder(text)(quote, occurrence);
+}
 
-  const t = normalize(text);
-  const q = normalize(quote).text.trim();
-  const at = pick(occurrences(t.text, q), occurrence);
-  if (at === null) return null;
-  const start = t.srcStart[at]!;
-  const end = t.srcEnd[at + q.length - 1]!;
-  return end > start ? [start, end] : null;
+export type QuoteFinder = (quote: string, occurrence?: number | null) => [number, number] | null;
+
+/**
+ * findQuote for many quotes in one text: the text is normalized at most once, on the first
+ * quote that has no exact match (normalizing a review-sized document takes ~100 ms).
+ */
+export function createQuoteFinder(text: string): QuoteFinder {
+  let t: Normalized | null = null;
+  return (quote, occurrence = null) => {
+    if (!quote) return null;
+    const exact = pick(occurrences(text, quote), occurrence);
+    if (exact !== null) return [exact, exact + quote.length];
+
+    t ??= normalize(text);
+    const q = normalize(quote).text.trim();
+    const at = pick(occurrences(t.text, q), occurrence);
+    if (at === null) return null;
+    const start = t.srcStart[at]!;
+    const end = t.srcEnd[at + q.length - 1]!;
+    return end > start ? [start, end] : null;
+  };
 }
 
 /**

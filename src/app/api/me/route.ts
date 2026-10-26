@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { signOut } from "@/auth";
 import { isAiConfigured } from "@/lib/ai/client";
 import { requireUser } from "@/lib/auth/session";
+import { crossSiteRefusal, readJson, SMALL_BODY_BYTES } from "@/lib/http/request";
 import { users } from "@/lib/users";
 import { deleteAccountSchema, emailSchema, updateProfileSchema } from "@/lib/users/schema";
 
@@ -18,7 +19,11 @@ export async function GET() {
 export async function PATCH(req: Request) {
   const userId = await requireUser();
   if (userId instanceof NextResponse) return userId;
-  const parsed = updateProfileSchema.safeParse(await req.json().catch(() => null));
+  const refused = crossSiteRefusal(req);
+  if (refused) return refused;
+  const body = await readJson(req, SMALL_BODY_BYTES);
+  if (!body.ok) return body.response;
+  const parsed = updateProfileSchema.safeParse(body.value);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   const user = await users.updateProfile(userId, parsed.data);
   return user ? NextResponse.json(user) : unauthorized();
@@ -28,7 +33,11 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   const userId = await requireUser();
   if (userId instanceof NextResponse) return userId;
-  const parsed = deleteAccountSchema.safeParse(await req.json().catch(() => null));
+  const refused = crossSiteRefusal(req);
+  if (refused) return refused;
+  const body = await readJson(req, SMALL_BODY_BYTES);
+  if (!body.ok) return body.response;
+  const parsed = deleteAccountSchema.safeParse(body.value);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const user = await users.getUser(userId);

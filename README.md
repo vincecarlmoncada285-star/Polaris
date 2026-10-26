@@ -112,7 +112,9 @@ Polaris uses two layers:
    - **Rate limits.** Per writer, in memory per server process: 30 requests a minute and 600
      a day. Answers served from the cache do not count. When a limit is reached, the editor
      pauses AI suggestions for as long as the server says, and says until when if it is more
-     than a few minutes.
+     than a few minutes. The whole server also answers at most 20,000 paragraph requests a day
+     (`POLARIS_AI_DAILY_PARAGRAPHS`), so many accounts together cannot run up an unbounded bill
+     on the server's key; a request one writer's own limits refused does not count towards it.
    - **Caching.** The server keeps answers in memory for 24 hours (up to 2,000), keyed by a
      SHA-256 hash of the model, effort, prompt version, goals, title, previous paragraph and
      paragraph text; the browser keeps the session's answers by goals and text, so undoing
@@ -125,6 +127,8 @@ Polaris uses two layers:
    | `POLARIS_AI_MODEL`            | `claude-opus-5-5` | The Claude model for suggestions and reviews.    |
    | `POLARIS_AI_PARAGRAPH_EFFORT` | `low`             | `low`, `medium` or `high`: depth versus latency. |
    | `POLARIS_AI_REVIEW_EFFORT`    | `high`            | `low` to `max`: effort for a [review](#review).  |
+   | `POLARIS_AI_DAILY_PARAGRAPHS` | `20000`           | Paragraph requests a day for the whole server.   |
+   | `POLARIS_AI_DAILY_REVIEWS`    | `500`             | Reviews a day for the whole server.              |
 
 Suggestions fall into five categories: correctness, clarity, concision, formality and
 citations. Citation rules follow the style chosen under **Goals** (APA by default).
@@ -214,9 +218,10 @@ it is dropped (the point it belongs to is kept). Nothing is ever applied to your
 - **Refusals.** As for paragraphs, the request opts in to the server-side refusal fallback
   (not for Haiku). If every model declines, the tab says that Claude declined to review the
   document, and the rest of Polaris carries on.
-- **Rate limits.** Per writer, in memory per server process: 6 reviews an hour and 30 a day.
-  Requests refused before reaching Claude (too short, AI off) do not count. When a limit is
-  reached, the tab says when you can ask again.
+- **Rate limits.** Per writer, in memory per server process: 6 reviews an hour and 30 a day,
+  and 500 a day for the whole server (`POLARIS_AI_DAILY_REVIEWS`). Requests refused before
+  reaching Claude (too short, AI off) do not count. When a limit is reached, the tab says when
+  you can ask again, or that the server's allowance for the day is used up.
 - **Privacy.** Polaris never logs document text, prompts or Claude's output; a failed call
   logs only a fixed label, the HTTP status and Anthropic's request id.
 
@@ -254,8 +259,22 @@ it is dropped (the point it belongs to is kept). Nothing is ever applied to your
   see what you searched for.
 - **The tab title** is the document's title ("Climate essay · Polaris"), kept up to date as you
   type it.
+- **Saving** is automatic, a moment after you stop typing. A save that fails (the network
+  dropped, the server restarted) is tried again after 2, 5, 15, 30 and then every 60 seconds,
+  without another edit, and the status says "Couldn’t save. Retrying…" meanwhile. Until then
+  this tab also keeps your unsaved edits in the browser's session storage: if the page is
+  reloaded before they are saved, the document offers **Restore my edits** or **Discard**.
+- **Two tabs or devices.** Every save carries the version of the document it was made from,
+  and the server refuses one made from an older version (409) rather than overwrite the newer
+  text. A tab that comes back into view first asks for the current version and, with nothing
+  unsaved, loads the newer text. With unsaved edits it says the document was changed
+  somewhere else and offers **Keep this version** (save yours over it) or **Load the saved
+  version**. Signing out first tries to save, and asks before signing out if it cannot.
 - **Leaving with unsaved changes** (an edit not yet saved, being saved, or whose save failed)
   makes the browser ask first; at any other time it does not.
+- **Limits per account:** 1,000 documents and 200 million stored characters (a long thesis is
+  well under a million), 120 new documents an hour and 240 saves a minute. One document holds
+  up to 5 million characters (counted as stored, formatting included).
 - **First-run help.** A new, empty document shows a short "How Polaris works" card under the
   toolbar until you choose **Got it**; the browser remembers that. (On a server without an
   Anthropic key it says AI is not set up, rather than pointing to Settings.)
@@ -351,10 +370,17 @@ Each writer has an account, and documents are private to it.
 - **Privacy.** Every API route calls `requireUser()` and every query is scoped by user id. Another
   writer's document is a 404, exactly like one that does not exist.
 - **Rate limits** (in memory, per server process, sliding windows): 10 sign-in attempts per
-  15 minutes per email and IP, plus at most 50 an hour per email from any number of IPs; 5
-  sign-up attempts per hour per IP (counted once the form is valid, so a whole class signing up
+  15 minutes per email and IP, plus at most 50 an hour per email from any number of IPs, and
+  30 per 15 minutes per IP whatever the email (when client IPs are known, below); 5 sign-up
+  attempts per hour per IP (counted once the form is valid, so a whole class signing up
   behind one school network will hit it); 10 password-change attempts per 15 minutes per
-  account.
+  account. Checking a password is deliberately slow (about a third of a second of CPU), so at
+  most 4 run at once; an attempt beyond that is told to try again in a moment rather than
+  queued, and the rest of the server stays responsive.
+- **Who can sign up.** Anyone, by default. `POLARIS_SIGNUP=closed` stops new accounts (the
+  sign-up page says so, and existing accounts sign in as before); create accounts first, then
+  close it. `POLARIS_SIGNUP_EMAIL_DOMAINS=uni.edu,college.ac.uk` allows only emails at those
+  domains or their subdomains, and the sign-up page says which.
 - **Client IPs and proxies.** Polaris can only tell clients apart by IP when a reverse proxy
   you control reports their address. Without one, `X-Forwarded-For` is whatever the client sent,
   so it is ignored and **all clients share the per-IP limits** (5 sign-ups an hour for the
@@ -415,6 +441,14 @@ rendered per request. An end-to-end test (`e2e/security.spec.ts`) goes through s
 editing, footnotes, links, importing, exporting, the panel tabs and Settings, and fails on any
 CSP violation.
 
+**Requests.** API routes that take a body accept only `Content-Type: application/json` (415
+otherwise), which a form on another site cannot send, and every route that changes something
+refuses a request the browser marks as cross-site (`Sec-Fetch-Site`, 403), on top of the
+session cookie's `SameSite=Lax` (Auth.js's own sign-in and sign-out endpoints check its CSRF
+token). Bodies are read with a cap and refused (413) as soon as they pass it: 16 KB for
+settings, password and sign-in requests, 160 KB for a paragraph sent for AI suggestions, and
+32 MB for saving a document.
+
 `Strict-Transport-Security` (one year, with subdomains) is sent only with `POLARIS_HSTS=1`. It
 tells browsers to refuse plain HTTP to the host for that year, so set it only once Polaris is
 served over HTTPS (behind a reverse proxy, say): on a plain-HTTP install it would lock everyone
@@ -453,6 +487,8 @@ monitor at it too.
 | `TRUSTED_PROXY_HOPS`                                                          | Behind a proxy   | How many reverse proxies append the client address to `X-Forwarded-For` (usually `1`), so per-IP rate limits see real clients ([Accounts](#accounts)). Leave `0` if clients can reach Polaris directly. |
 | `ANTHROPIC_API_KEY`                                                           | For AI           | Enables AI suggestions and reviews ([How feedback works](#how-feedback-works)).                                                                                                                         |
 | `POLARIS_AI_MODEL`, `POLARIS_AI_PARAGRAPH_EFFORT`, `POLARIS_AI_REVIEW_EFFORT` | No               | Model and effort for AI suggestions and reviews.                                                                                                                                                        |
+| `POLARIS_AI_DAILY_PARAGRAPHS`, `POLARIS_AI_DAILY_REVIEWS`                     | No               | Whole-server daily caps on AI requests (defaults 20,000 and 500), which bound what the Anthropic key can spend in a day.                                                                                |
+| `POLARIS_SIGNUP`, `POLARIS_SIGNUP_EMAIL_DOMAINS`                              | No               | `closed` stops new accounts; a comma-separated domain list limits who can sign up ([Accounts](#accounts)).                                                                                              |
 | `POLARIS_HSTS`                                                                | Once on HTTPS    | `1` sends `Strict-Transport-Security` ([Security headers](#security-headers)). Read at build time.                                                                                                      |
 | `DATABASE_URL`                                                                | No               | Set by the image to `file:/data/polaris.db`; `docker-compose.yml` keeps it there whatever `.env` says.                                                                                                  |
 
@@ -486,7 +522,8 @@ What Polaris stores and sends, in one place:
   everything. **Settings → Your data** downloads all your documents.
 - **In your browser only:** the panel tab you last chose, the library's search (for your
   account only, forgotten when you sign out) and sort, and whether you dismissed the first-run
-  help (localStorage); imported files are converted in the
+  help (localStorage); edits a tab could not save yet (sessionStorage: that tab only, gone
+  when it closes, and cleared when you sign out); imported files are converted in the
   browser and never uploaded.
 - **Sent to Anthropic** only if you switch on AI suggestions and the server has a key:
   paragraphs you write or change (for suggestions), and the whole document with its title,

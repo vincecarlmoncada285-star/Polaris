@@ -105,7 +105,7 @@ describe("AI rate limits", () => {
     const limits = createAiLimits(() => t);
     for (let i = 0; i < 30; i++) expect(limits.check("u1").ok).toBe(true);
     const refused = limits.check("u1");
-    expect(refused).toEqual({ ok: false, retryAfterMs: 60_000 });
+    expect(refused).toEqual({ ok: false, retryAfterMs: 60_000, scope: "user" });
     expect(limits.check("u2").ok).toBe(true);
     t = 60_000;
     expect(limits.check("u1").ok).toBe(true);
@@ -124,7 +124,7 @@ describe("AI rate limits", () => {
     const refused = limits.check("u1");
     expect(refused.ok).toBe(false);
     // The first of the day's requests (t = 0) leaves the window after 24 hours.
-    expect(refused).toEqual({ ok: false, retryAfterMs: 24 * HOUR - 20 * 60_000 });
+    expect(refused).toEqual({ ok: false, retryAfterMs: 24 * HOUR - 20 * 60_000, scope: "user" });
     t = 24 * HOUR;
     expect(limits.check("u1").ok).toBe(true);
   });

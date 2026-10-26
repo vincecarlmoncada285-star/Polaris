@@ -135,7 +135,11 @@ export function DocumentLibrary({
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch("/api/documents", { method: "POST", body: "{}" });
+      const res = await fetch("/api/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
       if (!res.ok) throw new Error();
       const doc = (await res.json()) as { id: string };
       router.push(`/documents/${doc.id}`);

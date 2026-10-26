@@ -343,6 +343,7 @@ describe("data export archive", () => {
     content: doc(p(t("Body"), fn("A note."))),
     plainText: "Body",
     wordCount: 1,
+    version: 0,
     goals: { citationStyle: "apa" },
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-02-01T00:00:00.000Z",

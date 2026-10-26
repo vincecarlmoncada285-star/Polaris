@@ -7,11 +7,12 @@ import { z } from "zod";
 import { RateLimitedSignIn, signIn, signOut } from "@/auth";
 import { users } from "@/lib/users";
 import { emailSchema, nameSchema, passwordSchema } from "@/lib/users/schema";
-import { EmailTakenError } from "@/lib/users/service";
+import { EmailTakenError, PasswordBusyError } from "@/lib/users/service";
 import { sanitizeCallbackUrl } from "./callback-url";
 import type { AuthField, AuthFormState } from "./form-state";
 import { clientIp, limits, RATE_LIMITED_MESSAGE } from "./limits";
 import { ACCOUNT_CREATED_PATH, SIGN_IN_PATH } from "./routes";
+import { domainsText, emailAllowed, SIGNUP_CLOSED_MESSAGE, signupPolicy } from "./signup-policy";
 
 // One message for unknown email and wrong password alike, so the form does not reveal
 // which emails have accounts.
@@ -63,6 +64,9 @@ export async function signUpAction(_prev: AuthFormState, form: FormData): Promis
   };
   const values = { name: input.name, email: input.email };
 
+  const policy = signupPolicy();
+  if (!policy.open) return { error: SIGNUP_CLOSED_MESSAGE, values };
+
   const parsed = signUpSchema.safeParse(input);
   if (!parsed.success) {
     const fieldErrors: AuthFormState["fieldErrors"] = {};
@@ -71,6 +75,13 @@ export async function signUpAction(_prev: AuthFormState, form: FormData): Promis
       fieldErrors[key] ??= issue.message;
     }
     return { fieldErrors, values };
+  }
+
+  if (!emailAllowed(parsed.data.email, policy)) {
+    return {
+      fieldErrors: { email: `Use your ${domainsText(policy.domains)} email address.` },
+      values,
+    };
   }
 
   // Counted after validation, so typos in the form do not use up the allowance.
@@ -85,6 +96,7 @@ export async function signUpAction(_prev: AuthFormState, form: FormData): Promis
     if (e instanceof EmailTakenError) {
       return { fieldErrors: { email: "An account with this email already exists." }, values };
     }
+    if (e instanceof PasswordBusyError) return { error: RATE_LIMITED_MESSAGE, values };
     throw e;
   }
 

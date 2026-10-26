@@ -37,6 +37,9 @@ model Document {
   goals     String           @default("{}")
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
+  // Raised by every update. A save names the version it was edited from, and is refused
+  // (409) if the document has changed since, so a stale tab cannot overwrite newer work.
+  version   Int              @default(0)
   reviews   DocumentReview[]
 
   @@index([userId, updatedAt])

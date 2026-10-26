@@ -39,6 +39,11 @@ describe("vague intensifiers", () => {
       { text: "very", fix: [""] },
     ]);
   });
+  it("deletes a capitalised intensifier at the start of a sentence without throwing", () => {
+    // matchCase("Very", "") used to read ""[0] and crash the editor on "Very good results."
+    expect(flagged(vagueIntensifiers, "Very good results.")).toEqual([{ text: "Very", fix: [""] }]);
+    expect(() => checkParagraph("Really, it is Extremely clear.")).not.toThrow();
+  });
   it("does not match inside other words", () => {
     expect(flagged(vagueIntensifiers, "superscript every reallocation")).toEqual([]);
   });

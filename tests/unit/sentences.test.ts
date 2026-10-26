@@ -25,3 +25,20 @@ describe("splitSentences", () => {
     for (const s of splitSentences(t)) expect(t.slice(s.start, s.end)).toBe(s.text);
   });
 });
+
+describe("splitSentences on adversarial punctuation", () => {
+  it("is linear on a long run of full stops that no space follows", () => {
+    const text = `${".".repeat(200_000)}x and then. A sentence.`;
+    const started = performance.now();
+    const sentences = splitSentences(text);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(sentences.at(-1)!.text).toBe("A sentence.");
+  });
+
+  it("still ends a sentence after a run of punctuation and closing quotes", () => {
+    expect(splitSentences('He asked "why?!" Then left...').map((s) => s.text)).toEqual([
+      'He asked "why?!"',
+      "Then left...",
+    ]);
+  });
+});

@@ -3,6 +3,7 @@ import { unstable_update } from "@/auth";
 import { limits, RATE_LIMITED_MESSAGE } from "@/lib/auth/limits";
 import { requireUserSession } from "@/lib/auth/session";
 import { reissueSession } from "@/lib/auth/session-version";
+import { crossSiteRefusal } from "@/lib/http/request";
 import { users } from "@/lib/users";
 
 /**
@@ -10,9 +11,11 @@ import { users } from "@/lib/users";
  * now is refused, and re-issues this device's session (a new cookie in the response) so it
  * stays signed in. 204 on success.
  */
-export async function POST() {
+export async function POST(req: Request) {
   const session = await requireUserSession();
   if (session instanceof NextResponse) return session;
+  const refused = crossSiteRefusal(req);
+  if (refused) return refused;
   const { userId } = session;
   if (!limits.revokeSessions.hit(userId).ok) {
     return NextResponse.json({ error: RATE_LIMITED_MESSAGE }, { status: 429 });

@@ -46,6 +46,11 @@ export const updateDocumentSchema = z
     content: contentSchema,
     plainText: plainTextSchema,
     goals: writingGoalsSchema,
+    /**
+     * The version the writer's editor last saw. When given, the save is refused if the
+     * document has changed since (another tab, another device, or a page restored by Back).
+     */
+    baseVersion: z.number().int().nonnegative(),
   })
   .partial();
 

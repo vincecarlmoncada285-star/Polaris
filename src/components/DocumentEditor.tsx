@@ -2,6 +2,7 @@
 
 import { EditorContent, useEditor, type Editor, type JSONContent } from "@tiptap/react";
 import { Placeholder } from "@tiptap/extensions";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paragraphGoals } from "@/lib/ai/protocol";
 import { createAutosaver, registerPendingSave, type SaveStatus } from "@/lib/autosave";
@@ -44,6 +45,13 @@ import {
 } from "@/lib/editor/locate";
 import { adjacentSuggestion, readingOrder } from "@/lib/editor/suggestion-nav";
 import { collectTextBlocks, withoutFootnotes } from "@/lib/editor/textblocks";
+import {
+  clearDraft,
+  keepaliveAllowed,
+  readDraft,
+  saveDraft,
+  type Draft,
+} from "@/lib/editor/drafts";
 import { SESSION_EXPIRED_PATH } from "@/lib/auth/routes";
 import { documentTitle, pageTitle } from "@/lib/page-title";
 import { detectPlatform, isTextField, matchEditorShortcut } from "@/lib/shortcuts";
@@ -63,14 +71,29 @@ import { SuggestionPanel, type AiPanelState } from "./SuggestionPanel";
 import { Toolbar } from "./Toolbar";
 import { useUnsavedChangesGuard } from "./useUnsavedChangesGuard";
 import { formatNumber } from "@/lib/text/format";
+import { LocalDateTime } from "./LocalDateTime";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "",
   pending: "Unsaved changes",
   saving: "Saving…",
   saved: "All changes saved",
-  error: "Couldn’t save. Retrying when you next edit.",
+  error: "Couldn’t save. Retrying…",
 };
+
+/** A save the server refused for a reason a retry will not fix (a conflict, a limit). */
+class SaveRefused extends Error {
+  constructor(readonly reason: "conflict" | "refused") {
+    super(`Save refused: ${reason}`);
+  }
+}
+
+/** A save the server asked to retry later (rate limited). */
+class SaveRetryAfter extends Error {
+  constructor(readonly ms: number) {
+    super("Save rate limited");
+  }
+}
 
 /** The status while saves are refused because this device's session has ended. */
 const SIGNED_OUT_LABEL = "Not saved: you’re signed out.";
@@ -114,6 +137,11 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   // change or "Sign out of all other devices" elsewhere, or a session that simply ended). Until
   // a save goes through again, every retry would be refused too, so the writer is told.
   const [signedOut, setSignedOut] = useState(false);
+  // Why the server refused the last save outright (a storage limit, a document too large).
+  const [saveRefusal, setSaveRefusal] = useState<string | null>(null);
+  // Unsaved edits this tab kept from an earlier visit to the document (src/lib/editor/drafts.ts).
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const router = useRouter();
   const [text, setText] = useState(doc.plainText);
   // Which blocks are headings: from the saved document until the editor has it, then from the
   // editor on every change. The same string either way, so a review loaded early is not stale.
@@ -162,54 +190,105 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   // Only text the writer then writes or changes is sent to Claude, as the Settings page says.
   const loadedParagraphs = useRef<string[] | null>(null);
 
-  // Accumulate every field touched since the last save, so a title edit is not lost
-  // behind a content edit that happens to be scheduled later.
+  // Every field touched since the last save that went through. A save takes all of it; if the
+  // save fails, its fields are merged back under anything edited since, so nothing (a title
+  // change behind a later content edit, say) is dropped.
   const pending = useRef<UpdateDocumentInput>({});
+  // The version this editor's text is based on: sent with every save, so a save from a stale
+  // copy (another tab saved since, or Back restored an old page) is refused, not applied.
+  const versionRef = useRef(doc.version);
+  const editorRef = useRef<Editor | null>(null);
+  const [conflict, setConflict] = useState<{ version: number } | null>(null);
+  const conflictRef = useRef(conflict);
+  conflictRef.current = conflict;
+  // Set while leaving on purpose (discarding a conflicted copy), so the unload prompt stays quiet.
+  const leavingRef = useRef(false);
+
+  /** Keeps a copy of everything unsaved in this tab, in case the save never gets through. */
+  const backUpDraft = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    saveDraft(doc.id, {
+      content: editor.getJSON(),
+      title: titleRef.current,
+      goals: goalsRef.current,
+      baseVersion: versionRef.current,
+      savedAt: new Date().toISOString(),
+    });
+  }, [doc.id]);
+
   const autosaver = useMemo(
     () =>
-      createAutosaver<UpdateDocumentInput>(
-        async (patch) => {
+      createAutosaver<true>(
+        async () => {
           // This save owns every field queued so far; later edits start a new patch.
+          const patch = pending.current;
           pending.current = {};
-          const res = await fetch(`/api/documents/${doc.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(patch),
-            keepalive: true,
-          });
-          if (!res.ok) {
-            // Put the fields back so the next save retries them.
+          const restore = () => {
             pending.current = { ...patch, ...pending.current };
+            backUpDraft();
+          };
+          const body = JSON.stringify({ ...patch, baseVersion: versionRef.current });
+          let res: Response;
+          try {
+            res = await fetch(`/api/documents/${doc.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body,
+              // Lets a save started as the page closes finish, but browsers refuse keepalive
+              // bodies over 64 KiB, which would make every save of a long document fail.
+              keepalive: keepaliveAllowed(body),
+            });
+          } catch (err) {
+            restore();
+            throw err;
+          }
+          if (!res.ok) {
+            restore();
             if (res.status === 401) setSignedOut(true);
+            if (res.status === 409) {
+              const info = (await res.json().catch(() => null)) as { version?: number } | null;
+              setConflict({ version: info?.version ?? versionRef.current });
+              throw new SaveRefused("conflict");
+            }
+            if (res.status === 429) {
+              throw new SaveRetryAfter(Number(res.headers.get("retry-after")) * 1000 || 5000);
+            }
+            if (res.status === 403 || res.status === 413) {
+              const info = (await res.json().catch(() => null)) as { error?: string } | null;
+              setSaveRefusal(info?.error ?? "This document could not be saved.");
+              throw new SaveRefused("refused");
+            }
             throw new Error(`Save failed: ${res.status}`);
           }
+          const saved = (await res.json()) as { version: number };
+          versionRef.current = saved.version;
           setSignedOut(false);
+          setSaveRefusal(null);
+          if (Object.keys(pending.current).length === 0) clearDraft(doc.id);
         },
-        { onStatus: setStatus },
+        {
+          onStatus: setStatus,
+          retryAfterMs: (err) =>
+            err instanceof SaveRefused ? null : err instanceof SaveRetryAfter ? err.ms : undefined,
+        },
       ),
-    [doc.id],
+    [doc.id, backUpDraft],
   );
 
   const queueSave = useCallback(
     (patch: UpdateDocumentInput) => {
       pending.current = { ...pending.current, ...patch };
-      autosaver.schedule(pending.current);
+      autosaver.schedule(true);
     },
     [autosaver],
   );
 
   /**
-   * Saves everything now, for a review of the document as the writer sees it. A save that
-   * failed earlier left its fields queued for the next edit: they are retried here. False if
-   * the server still does not have the latest text.
+   * Saves everything now, for a review of the document as the writer sees it; a save that
+   * failed earlier is retried. False if the server still does not have the latest text.
    */
-  const flushSave = useCallback(async () => {
-    if (autosaver.status === "error" && Object.keys(pending.current).length > 0) {
-      autosaver.schedule(pending.current);
-    }
-    await autosaver.flush();
-    return autosaver.status !== "error";
-  }, [autosaver]);
+  const flushSave = useCallback(() => autosaver.flush(), [autosaver]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -234,9 +313,22 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
     ],
     content: (doc.content as JSONContent | null) ?? undefined,
     onCreate: ({ editor }) => {
+      editorRef.current = editor;
       loadedParagraphs.current ??= paragraphTexts(editor);
       setLayout(blockLayout(editor.state.doc));
       setFootnotes(footnoteEntries(editor));
+      // Edits this tab could not save on an earlier visit, offered back unless they are what
+      // the server already has.
+      const kept = readDraft(doc.id);
+      if (
+        kept &&
+        JSON.stringify(kept.content) === JSON.stringify(editor.getJSON()) &&
+        kept.title === titleRef.current
+      ) {
+        clearDraft(doc.id);
+      } else if (kept) {
+        setDraft(kept);
+      }
     },
     editorProps: {
       attributes: {
@@ -360,8 +452,13 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
 
   // Save whatever is queued when the tab is hidden or closed, and before signing out (which
   // ends the session before this component unmounts).
+  // Anything still unsaved also goes into this tab's draft copy first: a long document's save
+  // cannot use keepalive, so it may not finish once the page is gone.
   useEffect(() => {
-    const flush = () => void autosaver.flush();
+    const flush = () => {
+      if (autosaver.unsaved && !leavingRef.current) backUpDraft();
+      void autosaver.flush();
+    };
     const onVisibility = () => document.visibilityState === "hidden" && flush();
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", onVisibility);
@@ -372,7 +469,74 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
       document.removeEventListener("visibilitychange", onVisibility);
       flush();
     };
-  }, [autosaver]);
+  }, [autosaver, backUpDraft]);
+
+  // Is this copy out of date? Back can restore the page as it was first loaded, and another
+  // tab may have saved since. Asked when the editor opens and whenever the writer comes back
+  // to the tab; with nothing unsaved here, the page reloads its data (the editor is keyed by
+  // version, so it starts again from the newer text). With unsaved edits, the next save is
+  // refused instead and the writer chooses (the conflict notice).
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      if (cancelled || autosaver.unsaved || conflictRef.current) return;
+      const res = await fetch(`/api/documents/${doc.id}?fields=version`, {
+        cache: "no-store",
+      }).catch(() => null);
+      if (!res?.ok || cancelled) return;
+      const { version } = (await res.json()) as { version: number };
+      if (version > versionRef.current && !autosaver.unsaved) router.refresh();
+    };
+    void check();
+    const onReturn = () => document.visibilityState === "visible" && void check();
+    window.addEventListener("pageshow", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pageshow", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
+    };
+  }, [autosaver, doc.id, router]);
+
+  /** Conflict: overwrite the saved version with this tab's text, or give this tab's text up. */
+  const keepMine = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || !conflictRef.current) return;
+    versionRef.current = conflictRef.current.version;
+    setConflict(null);
+    queueSave({
+      title: titleRef.current,
+      goals: goalsRef.current,
+      content: editor.getJSON(),
+      plainText: editor.getText({ blockSeparator: BLOCK_SEPARATOR }),
+    });
+    void autosaver.flush();
+  }, [autosaver, queueSave]);
+  const loadSaved = useCallback(() => {
+    leavingRef.current = true;
+    autosaver.cancel();
+    pending.current = {};
+    clearDraft(doc.id);
+    window.location.reload();
+  }, [autosaver, doc.id]);
+
+  /** Restores the draft this tab kept, as edits on the version it was made from. */
+  const restoreDraft = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || !draft) return;
+    versionRef.current = draft.baseVersion;
+    setTitle(draft.title);
+    setGoals(draft.goals);
+    goalsRef.current = draft.goals;
+    titleRef.current = draft.title;
+    setDraft(null);
+    editor.commands.setContent(draft.content as JSONContent, { emitUpdate: true });
+    queueSave({ title: draft.title, goals: draft.goals });
+  }, [draft, queueSave]);
+  const discardDraft = useCallback(() => {
+    clearDraft(doc.id);
+    setDraft(null);
+  }, [doc.id]);
 
   // The browser tab shows the title as it is typed (the server's metadata has the saved one).
   useEffect(() => {
@@ -380,7 +544,7 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
   }, [title]);
 
   // Leaving with an edit not yet saved asks first.
-  useUnsavedChangesGuard(status);
+  useUnsavedChangesGuard(status, leavingRef);
 
   // Selects a range found by the Overview or the Review, and brings it to the middle of the
   // screen (the editor's own scrolling only just reveals it).
@@ -608,6 +772,81 @@ export function DocumentEditor({ document: doc }: { document: DocumentDTO }) {
               If you can’t sign in, copy your recent changes somewhere safe before leaving this
               page.
             </p>
+          </div>
+        )}
+
+        {conflict && (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-50"
+            data-print="hide"
+            data-testid="conflict-notice"
+          >
+            <p className="font-semibold">
+              This document was changed somewhere else, so your latest edits here are not saved.
+            </p>
+            <p className="mt-1">
+              It may be open in another tab or on another device. Keep this version to save it over
+              the other one, or load the saved version (your edits here are then lost).
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={keepMine}
+                className="rounded-md bg-accent px-3 py-1.5 font-medium text-white dark:text-black"
+              >
+                Keep this version
+              </button>
+              <button
+                type="button"
+                onClick={loadSaved}
+                className="rounded-md border border-border bg-surface px-3 py-1.5"
+              >
+                Load the saved version
+              </button>
+            </div>
+          </div>
+        )}
+
+        {saveRefusal && status === "error" && !conflict && (
+          <p
+            role="alert"
+            className="mt-4 rounded-lg border border-red-300 bg-red-50 px-5 py-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+            data-print="hide"
+          >
+            {saveRefusal} Your latest edits are kept in this tab until they can be saved.
+          </p>
+        )}
+
+        {draft && (
+          <div
+            role="region"
+            aria-label="Unsaved edits"
+            className="mt-4 rounded-lg border border-border bg-surface px-5 py-4 text-sm"
+            data-print="hide"
+            data-testid="draft-notice"
+          >
+            <p className="font-semibold">This tab kept edits that were not saved.</p>
+            <p className="mt-1 text-muted">
+              From <LocalDateTime iso={draft.savedAt} />. Restore them to carry on where you left
+              off, or discard them to keep the document as saved.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={restoreDraft}
+                className="rounded-md bg-accent px-3 py-1.5 font-medium text-white dark:text-black"
+              >
+                Restore my edits
+              </button>
+              <button
+                type="button"
+                onClick={discardDraft}
+                className="rounded-md border border-border bg-surface px-3 py-1.5"
+              >
+                Discard
+              </button>
+            </div>
           </div>
         )}
 

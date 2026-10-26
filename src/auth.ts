@@ -5,6 +5,7 @@ import { authConfig } from "@/auth.config";
 import { clientIp, limits } from "@/lib/auth/limits";
 import { applyReissue } from "@/lib/auth/session-version";
 import { users } from "@/lib/users";
+import { PasswordBusyError } from "@/lib/users/service";
 
 /** Thrown from `authorize` so the sign-in form can say "try later" rather than "incorrect". */
 export class RateLimitedSignIn extends CredentialsSignin {
@@ -33,7 +34,10 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
         if (!parsed.success) return null;
         const { email, password } = parsed.data;
         if (!limits.allowSignIn(email, clientIp(request.headers))) throw new RateLimitedSignIn();
-        const user = await users.verifyCredentials(email, password);
+        const user = await users.verifyCredentials(email, password).catch((e: unknown) => {
+          if (e instanceof PasswordBusyError) throw new RateLimitedSignIn();
+          throw e;
+        });
         return user
           ? { id: user.id, email: user.email, name: user.name, sessionVersion: user.sessionVersion }
           : null;

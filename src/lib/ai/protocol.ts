@@ -42,7 +42,13 @@ export interface ParagraphResponse {
   cached: boolean;
 }
 
-export type AiErrorCode = "ai_disabled" | "ai_unavailable" | "rate_limited" | "ai_error";
+export type AiErrorCode =
+  | "ai_disabled"
+  | "ai_unavailable"
+  | "rate_limited"
+  // The whole server's daily allowance is used up (POLARIS_AI_DAILY_*), not the writer's own.
+  | "server_limit"
+  | "ai_error";
 
 export interface AiErrorBody {
   error: string;

@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDocumentService } from "@/lib/documents/service";
+import { createDocumentService, DocumentConflictError } from "@/lib/documents/service";
 import { updateDocumentSchema } from "@/lib/documents/schema";
 import { createTestDb } from "./test-db";
 
@@ -39,7 +39,8 @@ describe("document service", () => {
       plainText: "Hello there world",
       goals: { citationStyle: "apa" },
     });
-    expect(updated).toMatchObject({
+    expect(updated).toMatchObject({ id: created.id, wordCount: 3, version: 1 });
+    expect(await service.get(alice, created.id)).toMatchObject({
       title: "Essay",
       wordCount: 3,
       content,
@@ -64,7 +65,8 @@ describe("document service", () => {
 
   it("falls back to the default title when cleared", async () => {
     const doc = await service.create(alice, { title: "Draft" });
-    expect((await service.update(alice, doc.id, { title: "" }))?.title).toBe("Untitled document");
+    await service.update(alice, doc.id, { title: "" });
+    expect((await service.get(alice, doc.id))?.title).toBe("Untitled document");
   });
 
   it("bumps updatedAt on update and lists the most recently edited first", async () => {
@@ -80,6 +82,47 @@ describe("document service", () => {
 
   it("does not create documents for users that do not exist", async () => {
     await expect(service.create("no-such-user")).rejects.toThrow();
+  });
+});
+
+describe("usage", () => {
+  it("counts a user's documents and stored characters, optionally leaving one out", async () => {
+    const carol = await makeUser("carol@example.com");
+    expect(await service.usage(carol)).toEqual({ documents: 0, chars: 0 });
+    const content = { type: "doc", content: [] };
+    const a = await service.create(carol, { title: "A", content, plainText: "hello" });
+    await service.create(carol, { title: "B", content, plainText: "hi" });
+    const dave = await makeUser("dave@example.com");
+    await service.create(dave, { title: "Not Carol's", content, plainText: "x".repeat(100) });
+    const size = JSON.stringify(content).length;
+    expect(await service.usage(carol)).toEqual({ documents: 2, chars: 2 * size + 7 });
+    expect(await service.usage(carol, a.id)).toEqual({ documents: 2, chars: size + 2 });
+  });
+});
+
+describe("document versions", () => {
+  it("starts at 0 and raises the version on every save", async () => {
+    const doc = await service.create(alice);
+    expect(doc.version).toBe(0);
+    expect((await service.update(alice, doc.id, { title: "One" }))?.version).toBe(1);
+    expect((await service.update(alice, doc.id, { title: "Two" }))?.version).toBe(2);
+    expect(await service.version(alice, doc.id)).toMatchObject({ version: 2 });
+  });
+
+  it("refuses a save made from an older version, and changes nothing", async () => {
+    const doc = await service.create(alice, { title: "Original" });
+    await service.update(alice, doc.id, { title: "From tab A", baseVersion: 0 });
+    // Tab B still has version 0: its save must not overwrite tab A's.
+    const stale = service.update(alice, doc.id, { title: "From tab B", baseVersion: 0 });
+    await expect(stale).rejects.toBeInstanceOf(DocumentConflictError);
+    await expect(stale).rejects.toMatchObject({ version: 1 });
+    expect((await service.get(alice, doc.id))?.title).toBe("From tab A");
+  });
+
+  it("is a 404, not a conflict, for someone else's document", async () => {
+    const doc = await service.create(alice);
+    expect(await service.update(bob, doc.id, { title: "x", baseVersion: 0 })).toBeNull();
+    expect(await service.version(bob, doc.id)).toBeNull();
   });
 });
 
@@ -134,8 +177,8 @@ describe("update schema", () => {
   it("keeps the word target optional, and stores it with the other goals", async () => {
     expect(updateDocumentSchema.safeParse({ goals: { citationStyle: "apa" } }).success).toBe(true);
     const doc = await service.create(alice);
-    const updated = await service.update(alice, doc.id, { goals: { targetWords: 2000 } });
-    expect(updated?.goals).toEqual({ targetWords: 2000 });
+    await service.update(alice, doc.id, { goals: { targetWords: 2000 } });
+    expect((await service.get(alice, doc.id))?.goals).toEqual({ targetWords: 2000 });
   });
 
   it("rejects unknown goal values", () => {

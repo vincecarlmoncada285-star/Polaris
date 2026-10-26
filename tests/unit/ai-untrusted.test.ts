@@ -29,6 +29,15 @@ describe("createNeutralizer", () => {
     expect(out).toHaveLength(tag.length);
   });
 
+  it("stays linear on long runs of spaces and invisible characters", () => {
+    // Two adjacent gap groups once let one run split n ways: each "<" cost O(n²).
+    const gap = "\u200B".repeat(200_000);
+    const started = performance.now();
+    expect(neutralize(`<${gap}x`)).toBe(`<${gap}x`);
+    expect(neutralize(`<${gap}/${gap}document>`)).toBe(`＜${gap}/${gap}document>`);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it("leaves other angle brackets and tag-like words alone", () => {
     const text = "p < .05, a <b>bold</b> claim, <documents> and <documentary>, 3<4.";
     expect(neutralize(text)).toBe(text);

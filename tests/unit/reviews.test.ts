@@ -207,7 +207,7 @@ describe("review rate limits", () => {
     const limits = createReviewLimits(() => t);
     for (let i = 0; i < 6; i++) expect(limits.check("u").ok).toBe(true);
     const refused = limits.check("u");
-    expect(refused).toEqual({ ok: false, retryAfterMs: 60 * 60_000 });
+    expect(refused).toEqual({ ok: false, retryAfterMs: 60 * 60_000, scope: "user" });
     expect(limits.check("someone else").ok).toBe(true);
     t = 60 * 60_000 + 1;
     expect(limits.check("u").ok).toBe(true);
@@ -221,6 +221,10 @@ describe("review rate limits", () => {
       t += 10 * 60_000; // one every 10 minutes never meets the hourly limit
     }
     // 300 minutes in: the first review leaves the day's window at 1,440 minutes.
-    expect(limits.check("u")).toEqual({ ok: false, retryAfterMs: (1440 - 300) * 60_000 });
+    expect(limits.check("u")).toEqual({
+      ok: false,
+      retryAfterMs: (1440 - 300) * 60_000,
+      scope: "user",
+    });
   });
 });

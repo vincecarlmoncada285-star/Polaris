@@ -18,7 +18,9 @@ export const NEUTRAL_LT = "＜";
  * tag it becomes. Each prompt passes the tags it uses.
  */
 export function createNeutralizer(tags: readonly string[]): (text: string) => string {
-  const tagLike = new RegExp(`<(?=${GAP}/?${GAP}(?:${tags.join("|")})\\b)`, "giu");
+  // `GAP (?:/ GAP)?`, not `GAP /? GAP`: two gaps side by side could split one run of spaces
+  // in n ways, which made every "<" cost O(n²) (a minute-long freeze on a long document).
+  const tagLike = new RegExp(`<(?=${GAP}(?:/${GAP})?(?:${tags.join("|")})\\b)`, "giu");
   return (text) => text.replaceAll(OBJECT_REPLACEMENT, "\n").replace(tagLike, NEUTRAL_LT);
 }
 

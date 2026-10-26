@@ -12,6 +12,11 @@ export interface AuthLimits {
    * bounded even from many addresses (or a forged one).
    */
   signInPerEmail: RateLimiter;
+  /**
+   * Per IP, across every email (only when client addresses can be trusted: TRUSTED_PROXY_HOPS):
+   * one address trying many accounts, each with a fresh per-email allowance, is still slowed.
+   */
+  signInPerIp: RateLimiter;
   /** Per IP: slows account spam and probing which emails are registered. */
   signUp: RateLimiter;
   /** Per user: a stolen session should not be able to guess the current password quickly. */
@@ -25,15 +30,20 @@ export interface AuthLimits {
 export function createAuthLimits(now?: () => number): AuthLimits {
   const signIn = createRateLimiter({ limit: 10, windowMs: 15 * MINUTE, now });
   const signInPerEmail = createRateLimiter({ limit: 50, windowMs: 60 * MINUTE, now });
+  const signInPerIp = createRateLimiter({ limit: 30, windowMs: 15 * MINUTE, now });
   return {
     signIn,
     signInPerEmail,
+    signInPerIp,
     signUp: createRateLimiter({ limit: 5, windowMs: 60 * MINUTE, now }),
     changePassword: createRateLimiter({ limit: 10, windowMs: 15 * MINUTE, now }),
     revokeSessions: createRateLimiter({ limit: 5, windowMs: 15 * MINUTE, now }),
     allowSignIn(email, ip) {
-      // Per email + IP first: one address hammering away is refused without using up the
-      // account's shared allowance.
+      // Per IP across emails, when the address means something (all clients share UNKNOWN_IP
+      // otherwise, and one busy client must not lock everyone out).
+      if (ip !== UNKNOWN_IP && !signInPerIp.hit(ip).ok) return false;
+      // Per email + IP: one address hammering away is refused without using up the account's
+      // shared allowance.
       if (!signIn.hit(signInKey(email, ip)).ok) return false;
       return signInPerEmail.hit(normalizeEmailKey(email)).ok;
     },

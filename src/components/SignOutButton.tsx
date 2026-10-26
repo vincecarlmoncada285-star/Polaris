@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { signOutAction } from "@/lib/auth/actions";
 import { flushPendingSaves } from "@/lib/autosave";
 import { forgetSearch } from "@/lib/documents/library";
+import { clearAllDrafts } from "@/lib/editor/drafts";
 
 /**
  * Signing out clears the session cookie before the editor unmounts, so an edit still waiting
@@ -19,7 +20,17 @@ export function SignOutButton() {
     e.preventDefault();
     if (pending) return;
     startTransition(async () => {
-      await flushPendingSaves();
+      const saved = await flushPendingSaves();
+      if (
+        !saved &&
+        !window.confirm(
+          "Some of your latest changes could not be saved. Sign out anyway? Those changes will be lost.",
+        )
+      ) {
+        return;
+      }
+      // Unsaved copies this tab kept (src/lib/editor/drafts.ts) must not outlive the session.
+      clearAllDrafts();
       forgetSearch();
       // Redirects to /signin; the router follows it as it would for the form action.
       await signOutAction();

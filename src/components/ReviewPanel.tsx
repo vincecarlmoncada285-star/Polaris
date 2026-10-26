@@ -65,6 +65,8 @@ export function reviewErrorFor(
       return {
         message: `${body.error || "Too many reviews for now."} You can ask for a review again ${retryWhen(retryAfterSeconds, now)}.`,
       };
+    case "server_limit":
+      return { message: body.error };
     case "ai_disabled":
       return { message: "AI is off, so Polaris will not send your document.", settings: true };
     case "ai_unavailable":
