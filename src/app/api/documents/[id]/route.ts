@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "@/lib/zod";
 import { requireUser } from "@/lib/auth/session";
 import { documents } from "@/lib/documents";
 import { updateDocumentSchema } from "@/lib/documents/schema";
@@ -42,7 +43,8 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const body = await readJson(req, DOCUMENT_BODY_BYTES, "This document is too large.");
   if (!body.ok) return body.response;
   const parsed = updateDocumentSchema.safeParse(body.value);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
   const { id } = await params;
   const refused = await refuseSave(userId, id, parsed.data);
   if (refused) return refused;

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "@/lib/zod";
 import { requireUser } from "@/lib/auth/session";
 import { documents } from "@/lib/documents";
 import { createDocumentSchema } from "@/lib/documents/schema";
@@ -19,7 +20,8 @@ export async function POST(req: Request) {
   const body = await readJson(req, DOCUMENT_BODY_BYTES, "This document is too large.");
   if (!body.ok) return body.response;
   const parsed = createDocumentSchema.safeParse(body.value);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
   const refused = await refuseCreate(userId, parsed.data);
   if (refused) return refused;
   return NextResponse.json(await documents.create(userId, parsed.data), { status: 201 });

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "@/lib/zod";
 import { signOut } from "@/auth";
 import { isAiConfigured } from "@/lib/ai/client";
 import { requireUser } from "@/lib/auth/session";
@@ -24,7 +25,8 @@ export async function PATCH(req: Request) {
   const body = await readJson(req, SMALL_BODY_BYTES);
   if (!body.ok) return body.response;
   const parsed = updateProfileSchema.safeParse(body.value);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
   const user = await users.updateProfile(userId, parsed.data);
   return user ? NextResponse.json(user) : unauthorized();
 }
@@ -38,7 +40,8 @@ export async function DELETE(req: Request) {
   const body = await readJson(req, SMALL_BODY_BYTES);
   if (!body.ok) return body.response;
   const parsed = deleteAccountSchema.safeParse(body.value);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
 
   const user = await users.getUser(userId);
   if (!user) return unauthorized();

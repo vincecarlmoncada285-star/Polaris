@@ -1,8 +1,7 @@
 // The structured-output schema Claude fills in, and the clean-up applied to what comes back.
-// Built with zod/v4 because the SDK's betaZodOutputFormat helper needs it; app schemas stay on
-// plain "zod". Kept to objects, strings, enums, arrays and nullables: the helper strips
-// constraints such as maxLength, so lengths and counts are enforced here after parsing.
-import { z } from "zod/v4";
+// Kept to objects, strings, enums, arrays and nullables: the SDK's betaZodOutputFormat helper
+// strips constraints such as maxLength, so lengths and counts are enforced here after parsing.
+import { z } from "@/lib/zod";
 import type { Category } from "@/lib/rules/types";
 
 const CATEGORY_IDS = [

@@ -1,6 +1,6 @@
 import NextAuth, { CredentialsSignin } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { authConfig } from "@/auth.config";
 import { clientIp, limits } from "@/lib/auth/limits";
 import { applyReissue } from "@/lib/auth/session-version";

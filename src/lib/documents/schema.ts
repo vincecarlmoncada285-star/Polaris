@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@/lib/zod";
 
 export const TARGET_WORDS_MIN = 50;
 export const TARGET_WORDS_MAX = 200_000;

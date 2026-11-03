@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "@/lib/zod";
 import { unstable_update } from "@/auth";
 import { requireUserSession } from "@/lib/auth/session";
 import { limits, RATE_LIMITED_MESSAGE } from "@/lib/auth/limits";
@@ -26,7 +27,8 @@ export async function POST(req: Request) {
   const body = await readJson(req, SMALL_BODY_BYTES);
   if (!body.ok) return body.response;
   const parsed = changePasswordSchema.safeParse(body.value);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
 
   if (!limits.changePassword.hit(userId).ok) {
     return NextResponse.json({ error: RATE_LIMITED_MESSAGE }, { status: 429 });

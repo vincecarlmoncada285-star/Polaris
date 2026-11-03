@@ -1,7 +1,7 @@
 // The structured-output schema for a whole-document review, and the clean-up applied to what
-// comes back. Built with zod/v4 for the SDK helper, and kept to simple types: the helper drops
-// constraints such as maxLength or maxItems, so lengths and counts are enforced here.
-import { z } from "zod/v4";
+// comes back. Kept to simple types: the SDK's betaZodOutputFormat helper drops constraints such
+// as maxLength or maxItems, so lengths and counts are enforced here.
+import { z } from "@/lib/zod";
 import { createQuoteFinder, type QuoteFinder } from "./anchor";
 import { REVIEW_CATEGORIES, type ReviewResult } from "./protocol";
 import { truncate } from "./schema";

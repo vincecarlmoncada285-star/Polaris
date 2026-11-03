@@ -12,6 +12,22 @@ const compat = new FlatCompat({
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
+    // zod is configured once, in src/lib/zod.ts (see there); everything else imports it from it.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/lib/zod.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [{ name: "zod", message: 'Import z from "@/lib/zod", which configures it.' }],
+          patterns: [
+            { group: ["zod/*"], message: 'Import z from "@/lib/zod", which configures it.' },
+          ],
+        },
+      ],
+    },
+  },
+  {
     ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts"],
   },
 ];

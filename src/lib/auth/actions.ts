@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { CredentialsSignin } from "next-auth";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { RateLimitedSignIn, signIn, signOut } from "@/auth";
 import { users } from "@/lib/users";
 import { emailSchema, nameSchema, passwordSchema } from "@/lib/users/schema";
@@ -27,7 +27,7 @@ const signUpSchema = z
   })
   .refine((d) => d.password === d.confirmPassword, {
     path: ["confirmPassword"],
-    message: "Passwords do not match.",
+    error: "Passwords do not match.",
   });
 
 const field = (form: FormData, name: string) => {

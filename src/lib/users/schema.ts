@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { NAME_MAX, PASSWORD_MAX, PASSWORD_MIN } from "./constants";
 
 /** Emails are stored trimmed and lowercased, so lookups are case-insensitive. */
@@ -8,7 +8,8 @@ export const emailSchema = z
   .toLowerCase()
   .min(1, "Enter your email address.")
   .max(254, "That email address is too long.")
-  .email("Enter a valid email address.");
+  // After trimming and the length checks, which say what is wrong first.
+  .pipe(z.email("Enter a valid email address."));
 
 export const passwordSchema = z
   .string()

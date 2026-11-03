@@ -1,6 +1,6 @@
 // Structured outputs, read defensively: shared by the paragraph and review requests.
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
-import type { z } from "zod/v4";
+import type { z } from "@/lib/zod";
 
 /**
  * The structured-output format for `schema`, with a parse that returns null instead of

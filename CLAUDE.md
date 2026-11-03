@@ -78,13 +78,13 @@ data-content>`; renderText "" so plain text, word counts and getText() leave it 
     (goals, title, outline, `[P1]`-numbered paragraphs in `<document>` with `[^n]` footnote
     markers, and a numbered "Footnotes:" list at its end); streamed request
     (`beta.messages.stream` + `finalMessage()`, 64000 max_tokens, fallbacks as for paragraphs);
-    refusal -> `{ refused: true }`, max_tokens -> `AiOutputError`. `review-schema.ts`: its zod/v4
+    refusal -> `{ refused: true }`, max_tokens -> `AiOutputError`. `review-schema.ts`: its zod
     schema and `cleanReview()` (limits, quotes anchored to the plain text or dropped).
   - `untrusted.ts`: the neutralizer for student text between our tags (`createNeutralizer(tags)`,
     one tag list per prompt) and for `[P3]`-like markers. `structured.ts`: the non-throwing
     output format, "text after the last fallback block" parsing, `AiOutputError`.
     `route-errors.ts`: the SDK-error -> response mapping both AI routes share.
-  - `schema.ts` (zod/v4 structured-output schema + clean-up), `anchor.ts` (quote -> offsets),
+  - `schema.ts` (zod structured-output schema + clean-up), `anchor.ts` (quote -> offsets),
     `cache.ts` (LRU + TTL, sha256 keys that include the user id: no answer crosses accounts), `limits.ts` (30/min, 600/day per user for paragraphs;
     6/hour, 30/day for reviews; then whole-server daily caps, `POLARIS_AI_DAILY_PARAGRAPHS` /
     `POLARIS_AI_DAILY_REVIEWS`, checked after the user's own so a refused request uses none;

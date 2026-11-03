@@ -1,6 +1,6 @@
 // The AI routes' contracts (POST /api/ai/paragraph, and the document review), shared by the
 // routes and the editor. Client-safe: no SDK, no server-only imports.
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { writingGoalsSchema, type WritingGoals } from "@/lib/documents/schema";
 import type { Category } from "@/lib/rules/types";
 
@@ -13,7 +13,7 @@ export const paragraphRequestSchema = z
     text: z
       .string()
       .max(AI_MAX_PARAGRAPH_CHARS)
-      .refine((t) => t.trim().length > 0, { message: "Text is empty" }),
+      .refine((t) => t.trim().length > 0, { error: "Text is empty" }),
     goals: writingGoalsSchema,
     /** Context only: the document title. */
     title: z.string().max(AI_MAX_TITLE_CHARS).optional(),

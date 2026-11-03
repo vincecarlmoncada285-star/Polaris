@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "@/lib/zod";
 import { feedbackCacheKey, paragraphFeedbackCache, type CachedFeedback } from "@/lib/ai/cache";
 import { aiModel, getAnthropicClient, isAiConfigured, paragraphEffort } from "@/lib/ai/client";
 import { aiLimits } from "@/lib/ai/limits";
@@ -70,7 +71,7 @@ export async function POST(req: Request) {
     if (parsed.error.issues.some((i) => i.code === "too_big")) {
       return fail(413, "This paragraph is too long for AI suggestions.");
     }
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
   }
   const { text, goals } = parsed.data;
   // Blank context is no context: it neither reaches the prompt nor splits the cache.

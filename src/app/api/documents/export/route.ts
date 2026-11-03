@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { requireUser } from "@/lib/auth/session";
 import { documents } from "@/lib/documents";
 import { exportLimiter } from "@/lib/documents/limits";
@@ -39,7 +39,8 @@ export async function GET(req: Request) {
     cursor: params.get("cursor") ?? undefined,
     limit: params.get("limit") ?? undefined,
   });
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
   const page = await documents.exportPage(userId, {
     after: parsed.data.cursor,
     take: parsed.data.limit,
